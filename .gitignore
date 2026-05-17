@@ -2,5 +2,6 @@
 venv/
 __pycache__/
 *.db
-data/chroma/
+data/chroma_db/
 data/parsed/
+data/raw
