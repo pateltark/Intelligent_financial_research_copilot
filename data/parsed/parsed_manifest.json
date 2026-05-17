@@ -1,0 +1,12 @@
+{
+  "parsed_at": "2026-05-16T18:13:25.858936",
+  "total_docs": 21,
+  "total_words": 387920,
+  "by_ticker": {
+    "AAPL": 4,
+    "MSFT": 3,
+    "GOOGL": 6,
+    "NVDA": 5,
+    "TSLA": 3
+  }
+}
