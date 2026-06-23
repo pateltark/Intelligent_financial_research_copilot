@@ -5,7 +5,7 @@ import tempfile
 pdf = st.file_uploader("Upload File..")
 
 
-
+# For PDF path
 import tempfile
 
 def save_pdf(uploaded_file):
@@ -19,18 +19,24 @@ def save_pdf(uploaded_file):
 
         return tmp.name
     
-
 if pdf and "vectorstore" not in st.session_state:
 
     pdf_path = save_pdf(pdf)
 
     st.session_state.vectorstore = create_vectorstore(pdf_path)
 
-    st.success("PDF processed!")
+    st.success("PDF processed!")    
+    
+    
+if "messages" not in st.session_state:
+    st.session_state.messages = []
 
+for msg in st.session_state.messages:
+
+    with st.chat_message(msg["role"]):
+        st.write(msg["content"])
 
 question = st.chat_input("Ask a question")
-
 
 if question:
 
@@ -39,8 +45,34 @@ if question:
         st.session_state.vectorstore
     )
 
-    with st.chat_message("user"):
-        st.write(question)
+    st.session_state.messages.append({
+        "role": "user",
+        "content": question
+    })
 
-    with st.chat_message("assistant"):
-        st.write(answer)
+    st.session_state.messages.append({
+        "role": "assistant",
+        "content": answer
+    })
+
+    st.rerun()
+    
+
+
+
+
+# question = st.chat_input("Ask a question")
+
+
+# if question:
+
+#     answer = ask_llm(
+#         question,
+#         st.session_state.vectorstore
+#     )
+
+#     with st.chat_message("user"):
+#         st.write(question)
+
+#     with st.chat_message("assistant"):
+#         st.write(answer)
