@@ -5,3 +5,5 @@ __pycache__/
 data/chroma_db/
 data/parsed/
 data/raw
+edgar_docs/
+chroma_db/
