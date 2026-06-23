@@ -54,7 +54,6 @@ def create_vectorstore(pdf_path):
 
 
 #LLM 
-
 def ask_llm(que, vector_store):
 
 
