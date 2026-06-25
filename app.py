@@ -1,9 +1,14 @@
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_chroma import Chroma
+from langchain_postgres.vectorstores import PGVector
+
 
 from langchain_huggingface import HuggingFaceEmbeddings
 from sentence_transformers import SentenceTransformer
+
+
+from db import save_emb
 
 from groq import Groq
 import os
@@ -12,6 +17,8 @@ from dotenv import load_dotenv
 load_dotenv()
 
 groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+CONNECTION_STRING = "postgresql+psycopg2://postgres:Login@100@localhost:5432/ai"
+
 
 # pdf_path = "D:\intelligent_financial_research_copilot\_10-K-2025-As-Filed.pdf"
 
@@ -19,38 +26,27 @@ groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
 def create_vectorstore(pdf_path):
 
-#PDF load
-
     loader = PyPDFLoader(pdf_path)
-
     pages = loader.load()
 
-    #print(len(pages))
-
-    # print (full_text[:100])
-
-
-    # chunking
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=400,
+        chunk_overlap=60
+    )
 
     splitter = RecursiveCharacterTextSplitter(chunk_size=400, chunk_overlap=60)
-
     chunks = splitter.split_documents(pages)
 
-    embeddings = HuggingFaceEmbeddings(
-    model_name="sentence-transformers/all-MiniLM-L6-v2",
-    model_kwargs={'device': 'cpu'}
-    )
+    embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
 
-    persist_directory = "./chroma_db"
-
-    vector_store = Chroma.from_documents(
+    vectorstore = PGVector.from_documents(
         documents=chunks,
         embedding=embeddings,
-        persist_directory=persist_directory
+        connection=CONNECTION_STRING,
+        collection_name="chat_emb",  
     )
 
-    return vector_store
-
+    return vectorstore
 
 
 #LLM 

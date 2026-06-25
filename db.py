@@ -34,9 +34,63 @@ create_vector_table = """
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
 
+      """
 
 
-"""
+
+def save_chat(session_id, role, content):
+    query = """
+            INSERT INTO chat_history (session_id, role, content)
+            VALUES (%s, %s, %s)
+            """
+
+    cursor.execute(
+        query,
+        (session_id, role, content)
+    )
+
+
+def save_emb(session_id, role, content, embedding):
+
+    cursor.execute(
+        """
+        INSERT INTO chat_emb
+        (session_id, role, content, embedding)
+        VALUES (%s, %s, %s, %s)
+        """,
+        (
+            session_id,
+            role,
+            content,
+            embedding
+        )
+    )
+
+
+
+def load_chat(session_id):
+
+    cursor.execute ("""
+            SELECT role, content
+            FROM chat_history
+            WHERE session_id = %s
+            ORDER by id
+         """,
+         (session_id,))
+    
+    rows = cursor.fetchall()
+
+    messages = []
+
+    for role, content in rows:
+
+        messages.append({
+            "role": "user" if role == "human" else "assistant",
+            "content": content
+        })
+
+    return messages
+
 
 cursor.execute(table_query)
 cursor.execute(create_vector_table)
