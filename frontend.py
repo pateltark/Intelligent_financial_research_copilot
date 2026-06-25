@@ -1,88 +1,66 @@
 import streamlit as st
-from app import start, create_vectorstore, ask_llm
+from app import create_vectorstore, ask_llm
+from db import save_chat, load_chat
 import tempfile
 
-from db import save_chat, load_chat
-
-
-pdf = st.file_uploader("Upload File..")
 
 
 session_id = "user_1"
+
+
+if "messages" not in st.session_state:
+    st.session_state.messages = load_chat(session_id)
+
+
+if "vectorstores" not in st.session_state:
+    st.session_state.vectorstore = None
+
 
 # For PDF path
 import tempfile
 
 def save_pdf(uploaded_file):
-
-    with tempfile.NamedTemporaryFile(
-        delete=False,
-        suffix=".pdf"
-    ) as tmp:
-
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
         tmp.write(uploaded_file.getvalue())
-
         return tmp.name
     
-    
-if pdf and "vectorstore" not in st.session_state:
 
+pdf = st.file_uploader("Upload File..")
+
+if pdf and st.session_state.vectorstore is None:
     pdf_path = save_pdf(pdf)
-
     st.session_state.vectorstore = create_vectorstore(pdf_path)
-
     st.success("PDF processed!")    
     
-    
-if "messages" not in st.session_state:
-    st.session_state.messages = load_chat(session_id)
 
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.write(msg["content"])
 
-question = st.chat_input("Ask a question")
 
+question = st.chat_input("Ask a question...")
 
 if question:
 
-    st.session_state.messages.append({
-        "role": "user",
-        "content": question
-    })
+    
+    if st.session_state.vectorstore is None:
+        st.warning("Please upload a PDF first before asking a question.")
+        st.stop()
 
+    # Show user message immediately
+    with st.chat_message("user"):
+        st.write(question)
+
+    st.session_state.messages.append({"role": "user", "content": question})
     save_chat(session_id, "human", question)
 
-    answer = ask_llm(
-        question,
-        st.session_state.vectorstore
-    )
+    # Get answer and show it
+    with st.chat_message("assistant"):
+        with st.spinner("Thinking..."):
+            answer = ask_llm(question, st.session_state.vectorstore)
+        st.write(answer)
 
-    st.session_state.messages.append({
-        "role": "assistant",
-        "content": answer
-    })
-
+    st.session_state.messages.append({"role": "assistant", "content": answer})
     save_chat(session_id, "ai", answer)
 
     st.rerun()
-    
-
-
-
-
-# question = st.chat_input("Ask a question")
-
-
-# if question:
-
-#     answer = ask_llm(
-#         question,
-#         st.session_state.vectorstore
-#     )
-
-#     with st.chat_message("user"):
-#         st.write(question)
-
-#     with st.chat_message("assistant"):
-#         st.write(answer)
