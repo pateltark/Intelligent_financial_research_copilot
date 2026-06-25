@@ -1,15 +1,7 @@
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_chroma import Chroma
-from langchain_postgres.vectorstores import PGVector
-
-
-from langchain_huggingface import HuggingFaceEmbeddings
 from sentence_transformers import SentenceTransformer
-
-
-from db import save_emb
-
+from db import save_emb, related_chunks
 from groq import Groq
 import os
 from dotenv import load_dotenv
@@ -17,73 +9,49 @@ from dotenv import load_dotenv
 load_dotenv()
 
 groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
-CONNECTION_STRING = "postgresql+psycopg2://postgres:Login@100@localhost:5432/ai"
 
 
-# pdf_path = "D:\intelligent_financial_research_copilot\_10-K-2025-As-Filed.pdf"
+model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
 
-# que = "What is about this document is ?"
+
 
 def create_vectorstore(pdf_path):
 
     loader = PyPDFLoader(pdf_path)
     pages = loader.load()
 
-    splitter = RecursiveCharacterTextSplitter(
-        chunk_size=400,
-        chunk_overlap=60
-    )
-
     splitter = RecursiveCharacterTextSplitter(chunk_size=400, chunk_overlap=60)
     chunks = splitter.split_documents(pages)
 
-    embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+    for chunk in chunks:
+        content = chunk.page_content
+        embedding = model.encode(content).tolist()
+        save_emb(content, embedding)
 
-    vectorstore = PGVector.from_documents(
-        documents=chunks,
-        embedding=embeddings,
-        connection=CONNECTION_STRING,
-        collection_name="chat_emb",  
-    )
-
-    return vectorstore
+    print(f"{len(chunks)} chunks stored.")
+    return True  
 
 
-#LLM 
-def ask_llm(que, vector_store):
 
+def ask_llm(question, vectorstore=None):
 
-    context = vector_store.similarity_search(que, k=3)
+    results = related_chunks(question, k=3)
 
-    prompt = f"""
-    You are a helpful assistant.
+    context = "\n".join([row[0] for row in results])
 
-    Answer using the provided context.
+    prompt = f"""You are a helpful assistant.
+                Answer using the provided context only.
 
-    Context:
-    {context}
+                Context:
+                {context}
 
-    Question:
-    {que}
-    """
-
+                Question:
+                {question}"""
 
     response = groq_client.chat.completions.create(
         model="llama-3.3-70b-versatile",
-        messages= [{
-            "role" : "user",
-            "content" : prompt
-        }], temperature= 0
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0
     )
 
     return response.choices[0].message.content
-
-
-
-def start(que, pdf_path):
-
-    similar_vectors = create_vectorstore(pdf_path)
-
-    ans = ask_llm(que, similar_vectors)
-   
-    return ans
