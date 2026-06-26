@@ -34,7 +34,7 @@ create_vector_table = """
     CREATE TABLE IF NOT EXISTS chat_emb (
         id SERIAL PRIMARY KEY,
         content TEXT NOT NULL,
-        embedding VECTOR(768),
+        embedding VECTOR(384),
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
 """

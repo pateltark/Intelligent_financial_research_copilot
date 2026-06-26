@@ -1,49 +1,213 @@
-import requests, os
+# sec_agent.py
+import os, json, requests
 from dotenv import load_dotenv
+from groq import Groq
 
 load_dotenv()
 
-HEADERS = {"User-Agent": os.getenv("SEC_USER_AGENT")}
+client      = Groq(api_key=os.getenv("GROQ_API_KEY"))
+SEC_HEADERS = {"User-Agent": os.getenv("SEC_USER_AGENT")}
 
-def get_latest_filing(ticker_cik: str, form_type: str = "10-K"):
-    # CIK zero-pad to 10 digits
-    cik = ticker_cik.zfill(10)
-    
-    # Get submissions
-    url = f"https://data.sec.gov/submissions/CIK{cik}.json"
-    data = requests.get(url, headers=HEADERS).json()
-    
+# ── SEC Tool Functions ────────────────────────────────────
+
+def ticker_to_cik(ticker: str) -> str:
+    data = requests.get(
+        "https://www.sec.gov/files/company_tickers.json",
+        headers=SEC_HEADERS
+    ).json()
+    for entry in data.values():
+        if entry["ticker"].upper() == ticker.upper():
+            return str(entry["cik_str"])
+    raise ValueError(f"Ticker {ticker} not found")
+
+def fetch_sec_filings(ticker: str, form_type: str = "10-K", n: int = 3) -> list[dict]:
+    cik    = ticker_to_cik(ticker)
+    padded = cik.zfill(10)
+    data   = requests.get(
+        f"https://data.sec.gov/submissions/CIK{padded}.json",
+        headers=SEC_HEADERS
+    ).json()
+
     filings = data["filings"]["recent"]
-    
-    # Find first match
+    results = []
+
     for i, form in enumerate(filings["form"]):
-        if form == form_type:
+        if form == form_type and len(results) < n:
             accession = filings["accessionNumber"][i].replace("-", "")
             doc_name  = filings["primaryDocument"][i]
-            cik_raw   = cik.lstrip("0")
-            
-            doc_url = f"https://www.sec.gov/Archives/edgar/data/{cik_raw}/{accession}/{doc_name}"
-            return doc_url, doc_name
-    
-    return None, None
+            filed_at  = filings["filingDate"][i]
+            cik_raw   = cik.lstrip("0") or cik
 
-def download_filing(cik: str, form_type: str = "10-K", save_dir: str = "edgar_docs"):
+            results.append({
+                "filed_at":  filed_at,
+                "form_type": form_type,
+                "url": f"https://www.sec.gov/Archives/edgar/data/{cik_raw}/{accession}/{doc_name}",
+                "filename": f"{ticker}_{form_type}_{filed_at}.htm",
+            })
+
+    return results
+
+def download_and_read(url: str, filename: str, save_dir: str = "edgar_docs") -> str:
     os.makedirs(save_dir, exist_ok=True)
-    
-    doc_url, doc_name = get_latest_filing(cik, form_type)
-    if not doc_url:
-        print(f"No {form_type} found.")
-        return
-    
-    print(f"Fetching: {doc_url}")
-    r = requests.get(doc_url, headers=HEADERS)
-    
-    filepath = os.path.join(save_dir, doc_name)
-    with open(filepath, "wb") as f:
-        f.write(r.content)
-    
-    print(f"Saved: {filepath}")
-    return filepath
+    path = os.path.join(save_dir, filename)
 
-# Usage — CIK for Tesla
-download_filing("1318605", form_type="10-K")
+    if not os.path.exists(path):
+        r = requests.get(url, headers=SEC_HEADERS)
+        with open(path, "wb") as f:
+            f.write(r.content)
+
+    from html.parser import HTMLParser
+
+    class TextExtractor(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.text = []
+        def handle_data(self, data):
+            stripped = data.strip()
+            if stripped:
+                self.text.append(stripped)
+
+    with open(path, "r", errors="ignore") as f:
+        raw = f.read()
+
+    parser = TextExtractor()
+    parser.feed(raw)
+    full_text = " ".join(parser.text)
+
+    # ── extract only financial keywords section ──
+    keywords = ["revenue", "net income", "earnings", "total revenue",
+                "gross profit", "operating income", "cash flow"]
+    
+    words     = full_text.split()
+    extracted = []
+    
+    for i, word in enumerate(words):
+        if any(kw in word.lower() for kw in keywords):
+            # grab surrounding 50 words context
+            start = max(0, i - 50)
+            end   = min(len(words), i + 50)
+            chunk = " ".join(words[start:end])
+            if chunk not in extracted:
+                extracted.append(chunk)
+        
+        if len(extracted) >= 10:  # max 10 chunks
+            break
+
+    result = "\n---\n".join(extracted)
+    return result[:3000]  # hard cap at 3000 chars# ~6k words fits context
+
+
+# ── Tool Definition (Groq format = OpenAI format) ────────
+
+TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "fetchSECDocument",
+            "description": "Fetch latest SEC EDGAR filings for a company. Call this for any financial question.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "ticker": {
+                        "type": "string",
+                        "description": "Stock ticker e.g. TSLA, AAPL"
+                    },
+                    "form_type": {
+                        "type": "string",
+                        "enum": ["10-K", "10-Q", "8-K", "DEF 14A", "S-1"],
+                        "description": "10-K=annual, 10-Q=quarterly, 8-K=events"
+                    },
+                    "n_docs": {
+                        "type": ["integer", "string"],
+                        "description": "Number of filings to fetch, default 2",
+                        "default": 2,
+                        "minimum": 1,
+                        "maximum": 4
+                    }
+                },
+                "required": ["ticker", "form_type"]
+            }
+        }
+    }
+]
+
+
+# ── Tool Executor ─────────────────────────────────────────
+
+def run_tool(tool_name: str, tool_input: dict) -> str:
+    if tool_name == "fetch_sec_document":
+        ticker    = tool_input["ticker"]
+        form_type = tool_input.get("form_type", "10-K")
+        n         = int(tool_input.get("n_docs", 2))
+
+        print(f"\n🔧 Fetching: {ticker} | {form_type} | n={n}")
+
+        try:
+            filings = fetch_sec_filings(ticker, form_type, n)
+        except ValueError as e:
+            return str(e)
+
+        if not filings:
+            return f"No {form_type} filings found for {ticker}."
+
+        all_text = ""
+        for f in filings:
+            print(f"  ↓ {f['filed_at']} — {f['filename']}")
+            text = download_and_read(f["url"], f["filename"])
+            all_text += f"\n\n--- {ticker} {form_type} filed {f['filed_at']} ---\n{text}"
+
+        return all_text
+
+    return "Unknown tool."
+
+
+# ── Agent Loop ────────────────────────────────────────────
+
+def ask(question: str):
+    print(f"\n💬 User: {question}")
+
+    messages = [
+        {
+            "role": "system",
+            "content": "You are a financial research assistant. Use the fetch_sec_document tool to retrieve real SEC filings before answering any company-related financial questions."
+        },
+        {"role": "user", "content": question}
+    ]
+
+    while True:
+        res = client.chat.completions.create(
+                model="llama-3.3-70b-versatile",  # fast, tool use supported, low token usage
+                messages=messages,
+                tools=TOOLS,
+                tool_choice="auto",
+                # max_tokens=1024,
+            )
+
+        msg         = res.choices[0].message
+        stop_reason = res.choices[0].finish_reason
+
+        # ── LLM wants to call a tool ──────────────────────
+        if stop_reason == "tool_calls" and msg.tool_calls:
+            messages.append(msg)  # append assistant msg with tool_calls
+
+            for tc in msg.tool_calls:
+                tool_input = json.loads(tc.function.arguments)
+                result     = run_tool(tc.function.name, tool_input)
+
+                messages.append({
+                    "role":         "tool",
+                    "tool_call_id": tc.id,
+                    "content":      result,
+                })
+
+        # ── LLM has final answer ──────────────────────────
+        elif stop_reason == "stop":
+            print(f"\n🤖 Answer:\n{msg.content}")
+            return msg.content
+
+
+# ── Run ───────────────────────────────────────────────────
+if __name__ == "__main__":
+    ask("What is Tesla's latest annual revenue and net income?")
+    ask("Any recent 8-K events from Apple?")
+    ask("What did Microsoft say about AI in their last quarterly report?")
