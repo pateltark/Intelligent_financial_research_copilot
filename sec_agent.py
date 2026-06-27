@@ -74,37 +74,35 @@ def download_and_read(url: str, filename: str, save_dir: str = "edgar_docs") -> 
     parser.feed(raw)
     full_text = " ".join(parser.text)
 
-    # ── extract only financial keywords section ──
     keywords = ["revenue", "net income", "earnings", "total revenue",
                 "gross profit", "operating income", "cash flow"]
-    
+
     words     = full_text.split()
     extracted = []
-    
+
     for i, word in enumerate(words):
         if any(kw in word.lower() for kw in keywords):
-            # grab surrounding 50 words context
             start = max(0, i - 50)
             end   = min(len(words), i + 50)
             chunk = " ".join(words[start:end])
             if chunk not in extracted:
                 extracted.append(chunk)
-        
-        if len(extracted) >= 10:  # max 10 chunks
+
+        if len(extracted) >= 10:
             break
 
     result = "\n---\n".join(extracted)
-    return result[:3000]  # hard cap at 3000 chars# ~6k words fits context
+    return result[:3000]
 
 
-# ── Tool Definition (Groq format = OpenAI format) ────────
+# ── Tool Definition ───────────────────────────────────────
 
 TOOLS = [
     {
         "type": "function",
         "function": {
-            "name": "fetchSECDocument",
-            "description": "Fetch latest SEC EDGAR filings for a company. Call this for any financial question.",
+            "name": "fetch_sec_document",
+            "description": "Fetch latest SEC EDGAR filings for a company. Call this ONCE per question.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -118,11 +116,11 @@ TOOLS = [
                         "description": "10-K=annual, 10-Q=quarterly, 8-K=events"
                     },
                     "n_docs": {
-                        "type": ["integer", "string"],
-                        "description": "Number of filings to fetch, default 2",
-                        "default": 2,
+                        "type": "integer",       # ← integer only, no "string"
+                        "description": "Number of filings to fetch",
+                        "default": 1,
                         "minimum": 1,
-                        "maximum": 4
+                        "maximum": 3
                     }
                 },
                 "required": ["ticker", "form_type"]
@@ -138,7 +136,7 @@ def run_tool(tool_name: str, tool_input: dict) -> str:
     if tool_name == "fetch_sec_document":
         ticker    = tool_input["ticker"]
         form_type = tool_input.get("form_type", "10-K")
-        n         = int(tool_input.get("n_docs", 2))
+        n         = int(tool_input.get("n_docs", 1))
 
         print(f"\n🔧 Fetching: {ticker} | {form_type} | n={n}")
 
@@ -169,41 +167,45 @@ def ask(question: str):
     messages = [
         {
             "role": "system",
-            "content": "You are a financial research assistant. Use the fetch_sec_document tool to retrieve real SEC filings before answering any company-related financial questions."
+            "content": "You are a financial research assistant. Call fetch_sec_document ONCE to retrieve filings, then answer based on the result. Do not call the tool more than once per question."
         },
         {"role": "user", "content": question}
     ]
 
-    while True:
+    max_iterations = 3   # ← loop guard
+    iterations     = 0
+
+    while iterations < max_iterations:
+        iterations += 1
+
         res = client.chat.completions.create(
-                model="llama-3.3-70b-versatile",  # fast, tool use supported, low token usage
-                messages=messages,
-                tools=TOOLS,
-                tool_choice="auto",
-                # max_tokens=1024,
-            )
+            model="llama-3.3-70b-versatile",
+            messages=messages,
+            tools=TOOLS,
+            tool_choice="auto",
+            max_tokens=1024,
+        )
 
         msg         = res.choices[0].message
         stop_reason = res.choices[0].finish_reason
 
-        # ── LLM wants to call a tool ──────────────────────
         if stop_reason == "tool_calls" and msg.tool_calls:
-            messages.append(msg)  # append assistant msg with tool_calls
+            messages.append(msg)
 
             for tc in msg.tool_calls:
                 tool_input = json.loads(tc.function.arguments)
                 result     = run_tool(tc.function.name, tool_input)
-
                 messages.append({
                     "role":         "tool",
                     "tool_call_id": tc.id,
                     "content":      result,
                 })
 
-        # ── LLM has final answer ──────────────────────────
         elif stop_reason == "stop":
             print(f"\n🤖 Answer:\n{msg.content}")
             return msg.content
+
+    return "Max iterations reached without a final answer."
 
 
 # ── Run ───────────────────────────────────────────────────
