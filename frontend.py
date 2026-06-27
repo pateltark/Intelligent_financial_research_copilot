@@ -1,5 +1,5 @@
 import streamlit as st
-from app import create_vectorstore, ask_llm
+from rag import create_vectorstore, ask_llm
 from db import save_chat, load_chat
 import tempfile
 
