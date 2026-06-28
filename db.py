@@ -22,6 +22,7 @@ cursor = conn.cursor()
 table_query = """
     CREATE TABLE IF NOT EXISTS chat_history (
         id SERIAL PRIMARY KEY,
+        user_id TEXT NOT NULL,
         session_id VARCHAR(50) NOT NULL,
         role VARCHAR(20) NOT NULL,
         content TEXT,
@@ -33,28 +34,50 @@ table_query = """
 create_vector_table = """
     CREATE TABLE IF NOT EXISTS chat_emb (
         id SERIAL PRIMARY KEY,
+        user_id TEXT NOT NULL,
         content TEXT NOT NULL,
         embedding VECTOR(384),
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
 """
 
+user_login = """
+    CREATE TABLE IF NOT EXISTS user_login (
+        id SERIAL PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        email VARCHAR (254) NOT NULL,
+        pass_word TEXT NOT NULL,
+        name TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+"""
 
-def save_chat(session_id, role, content):
+
+def save_user_info(session_id, user_id, email, pass_word, name):
     cursor.execute(
         """
-        INSERT INTO chat_history (session_id, role, content)
+        INSERT INTO user_login (session_id, user_id, email, pass_word, name)
         VALUES (%s, %s, %s)
         """,
-        (session_id, role, content)
+        (session_id, user_id, email, pass_word, name)
+    )
+
+
+def save_chat(session_id, user_id, role, content):
+    cursor.execute(
+        """
+        INSERT INTO chat_history (session_id, user_id,  role, content)
+        VALUES (%s, %s, %s)
+        """,
+        (session_id, user_id,  role, content)
     )
 
 
 
-def save_emb(content, embedding):
+def save_emb(content, user_id, embedding):
     cursor.execute(
         """
-        INSERT INTO chat_emb (content, embedding)
+        INSERT INTO chat_emb (content, user_id, embedding)
         VALUES (%s, %s)
         """,
         (
@@ -64,15 +87,15 @@ def save_emb(content, embedding):
     )
 
 
-def load_chat(session_id):
+def load_chat(user_id):
     cursor.execute(
         """
         SELECT role, content
         FROM chat_history
-        WHERE session_id = %s
+        WHERE user_id = %s
         ORDER BY id
         """,
-        (session_id,)
+        (user_id,)
     )
 
     rows = cursor.fetchall()
