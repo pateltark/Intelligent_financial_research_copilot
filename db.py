@@ -53,23 +53,23 @@ user_login = """
 """
 
 
-def save_user_info(session_id, user_id, email, pass_word, name):
+def save_user_info(user_id, email, pass_word, name):
     cursor.execute(
         """
-        INSERT INTO user_login (session_id, user_id, email, pass_word, name)
-        VALUES (%s, %s, %s)
+        INSERT INTO user_login (user_id, email, pass_word, name)
+        VALUES (%s, %s, %s, %s)
         """,
-        (session_id, user_id, email, pass_word, name)
+        (user_id, email, pass_word, name)
     )
 
 
-def save_chat(session_id, user_id, role, content):
+def save_chat(user_id, role, content):
     cursor.execute(
         """
-        INSERT INTO chat_history (session_id, user_id,  role, content)
+        INSERT INTO chat_history (user_id,  role, content)
         VALUES (%s, %s, %s)
         """,
-        (session_id, user_id,  role, content)
+        (user_id,  role, content)
     )
 
 
@@ -130,6 +130,19 @@ def related_chunks(question, k=3):
 
     return cursor.fetchall()
 
+def get_user_by_email(email):
+    cursor.execute(
+        "SELECT user_id, email, pass_word, name FROM user_login WHERE email = %s",
+        (email,)
+    )
+    row = cursor.fetchone()
+    if not row:
+        return None
+    return {"user_id": row[0], "email": row[1], "pass_word": row[2], "name": row[3]}
+
+
+
 
 cursor.execute(table_query)
 cursor.execute(create_vector_table)
+cursor.execute(user_login)
