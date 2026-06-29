@@ -1,0 +1,58 @@
+.wrapper {
+    display: flex;
+    flex-direction: column;
+    max-width: 78%;
+    gap: 4px;
+}
+
+.user {
+    align-self: flex-end;
+    align-items: flex-end;
+}
+
+.assistant {
+    align-self: flex-start;
+    align-items: flex-start;
+}
+
+.badge {
+    font-size: 0.68rem;
+    font-family: var(--font-mono);
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 99px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+.sec {
+    background: var(--sec-bg);
+    color: var(--sec);
+}
+
+.rag {
+    background: var(--rag-bg);
+    color: var(--rag);
+}
+
+.bubble {
+    padding: 0.65rem 1rem;
+    border-radius: var(--radius);
+    font-size: 0.9rem;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.bubbleUser {
+    background: var(--accent);
+    color: #fff;
+    border-bottom-right-radius: 3px;
+}
+
+.bubbleAssistant {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-bottom-left-radius: 3px;
+}

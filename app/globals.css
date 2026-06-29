@@ -1,0 +1,59 @@
+@import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Inter:wght@400;500;600&display=swap");
+
+*,
+*::before,
+*::after {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+:root {
+    --bg: #0a0c0f;
+    --surface: #111418;
+    --border: #1e2329;
+    --muted: #2a3040;
+    --text: #e2e8f0;
+    --text-dim: #64748b;
+    --accent: #3b82f6;
+    --accent-dim: #1d4ed8;
+    --sec: #93c5fd;
+    --sec-bg: #1e3a5f;
+    --rag: #6ee7b7;
+    --rag-bg: #1e3d2f;
+    --error: #f87171;
+    --radius: 10px;
+    --font-sans: "Inter", sans-serif;
+    --font-mono: "IBM Plex Mono", monospace;
+}
+
+body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-sans);
+    font-size: 15px;
+    line-height: 1.6;
+    min-height: 100vh;
+}
+
+button {
+    cursor: pointer;
+    font-family: var(--font-sans);
+}
+
+input {
+    font-family: var(--font-sans);
+}
+
+::-webkit-scrollbar {
+    width: 6px;
+}
+
+::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+    background: var(--muted);
+    border-radius: 99px;
+}
