@@ -23,7 +23,7 @@ table_query = """
     CREATE TABLE IF NOT EXISTS chat_history (
         id SERIAL PRIMARY KEY,
         user_id TEXT NOT NULL,
-        session_id VARCHAR(50) NOT NULL,
+        
         role VARCHAR(20) NOT NULL,
         content TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -63,29 +63,21 @@ def save_user_info(user_id, email, pass_word, name):
     )
 
 
+def save_emb(content, user_id, embedding):
+    emb_json = json.dumps(embedding)
+    cursor.execute(
+        "INSERT INTO chat_emb (content, user_id, embedding) VALUES (%s, %s, %s)",
+        (content, user_id, emb_json)
+    )
+
 def save_chat(user_id, role, content):
     cursor.execute(
         """
-        INSERT INTO chat_history (user_id,  role, content)
+        INSERT INTO chat_history (user_id, role, content)
         VALUES (%s, %s, %s)
         """,
-        (user_id,  role, content)
+        (user_id, role, content)
     )
-
-
-
-def save_emb(content, user_id, embedding):
-    cursor.execute(
-        """
-        INSERT INTO chat_emb (content, user_id, embedding)
-        VALUES (%s, %s)
-        """,
-        (
-            content,
-            json.dumps(embedding)   
-        )
-    )
-
 
 def load_chat(user_id):
     cursor.execute(
@@ -103,7 +95,7 @@ def load_chat(user_id):
 
     for role, content in rows:
         messages.append({
-            "role": "user" if role == "human" else "assistant",
+            "role": "user" if role == "user" else "ai",
             "content": content
         })
 
@@ -111,7 +103,7 @@ def load_chat(user_id):
 
 
 
-def related_chunks(question, k=3):
+def related_chunks(user_id, question, k=3):
     query_embedding = model.encode(question).tolist()
 
     cursor.execute(
@@ -119,15 +111,16 @@ def related_chunks(question, k=3):
         SELECT content,
                embedding <=> %s::vector AS distance
         FROM chat_emb
+        WHERE user_id = %s
         ORDER BY distance
         LIMIT %s
         """,
         (
-            json.dumps(query_embedding), 
+            json.dumps(query_embedding),
+            user_id,
             k
         )
     )
-
     return cursor.fetchall()
 
 def get_user_by_email(email):
