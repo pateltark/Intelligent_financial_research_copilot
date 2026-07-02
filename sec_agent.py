@@ -2,6 +2,7 @@
 import os, json, requests
 from dotenv import load_dotenv
 from groq import Groq
+from db import load_chat
 
 load_dotenv()
 
@@ -161,15 +162,28 @@ def run_tool(tool_name: str, tool_input: dict) -> str:
 
 # ── Agent Loop ────────────────────────────────────────────
 
-def ask(question: str):
-    print(f"\n💬 User: {question}")
+def ask(question, user_id):
+
+    chat_history = load_chat(user_id)[-10:]
+
+    history_text = ""
+    for msg in chat_history:
+        role = "user" if msg["role"] == "user" else "assistant"
+        history_text += f"{role}: {msg['content']}\n"
 
     messages = [
         {
             "role": "system",
             "content": "You are a financial research assistant. Call fetch_sec_document ONCE to retrieve filings, then answer based on the result. Do not call the tool more than once per question."
         },
-        {"role": "user", "content": question}
+        {
+            "role": "user",
+            "content": f"""Previous conversation:
+{history_text}
+
+Current Question:
+{question}"""
+        }
     ]
 
     max_iterations = 3   # ← loop guard

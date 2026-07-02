@@ -9,7 +9,7 @@ from jose import JWTError
 from sec_agent import ask as sec_ask
 from rag import create_vectorstore, ask_llm
 from auth import hash_password, verify_password, create_access_token, decode_token
-from db import save_user_info, get_user_by_email
+from db import save_user_info, get_user_by_email, save_chat, save_emb
 
 app = FastAPI(title="SEC Edgar Research API")
 
@@ -86,7 +86,7 @@ async def upload_pdf(file: UploadFile = File(...), user=Depends(get_current_user
         tmp.write(await file.read())
         tmp_path = tmp.name
     try:
-        create_vectorstore(tmp_path)
+        create_vectorstore(tmp_path, user["sub"])
         pdf_ready = True
     finally:
         os.unlink(tmp_path)
@@ -103,7 +103,11 @@ def clear_pdf(user=Depends(get_current_user)):
 @app.post("/ask/sec")
 def ask_sec(body: QueryRequest, user=Depends(get_current_user)):
     try:
-        answer = sec_ask(body.query)
+        answer = sec_ask(body.query, user["sub"])
+
+        save_chat(user["sub"], "user", body.query)
+        save_chat(user["sub"], "ai", answer)
+
         return {"mode": "sec", "answer": answer}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -114,7 +118,11 @@ def ask_rag(body: QueryRequest, user=Depends(get_current_user)):
     if not pdf_ready:
         raise HTTPException(status_code=400, detail="No PDF uploaded yet.")
     try:
-        answer = ask_llm(body.query)
+        answer = ask_llm(body.query, user['sub'])
+
+        save_chat(user["sub"], "user", body.query)
+        save_chat(user["sub"], "ai", answer)
+        
         return {"mode": "rag", "answer": answer}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -139,9 +147,14 @@ def ask_auto(body: QueryRequest, user=Depends(get_current_user)):
         mode = "rag" if pdf_ready else "sec"
     try:
         if mode == "sec":
-            answer = sec_ask(body.query)
+            answer = sec_ask(body.query, user["sub"])
         else:
-            answer = ask_llm(body.query)
+            answer = ask_llm(body.query, user["sub"])
+
+        save_chat(user["sub"], "user", body.query)
+        save_chat(user["sub"], "ai", answer)
+
         return {"mode": mode, "answer": answer}
+    
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
