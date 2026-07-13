@@ -61,8 +61,8 @@ export async function clearPDF() {
     return data;
 }
 
-export async function ask(query) {
-    const res = await fetch(`${BASE}/ask`, {
+export async function chat(query) {
+    const res = await fetch(`${BASE}/chat`, {
         method: "POST",
         headers: authHeaders(),
         body: JSON.stringify({ query }),
