@@ -2,7 +2,7 @@ import streamlit as st
 import tempfile, os
 
 from sec_agent import ask as sec_ask
-from rag import create_vectorstore, ask_llm
+from ragg import create_vectorstore, ask_llm
 
 # ── Page config ───────────────────────────────────────────
 
