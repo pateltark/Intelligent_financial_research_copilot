@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { register, login, logout, ask, uploadPDF, clearPDF } from "./api.js";
+import { register, login, logout, chat, uploadPDF, clearPDF } from "./api.js";
 import "./App.css";
 
 // ── Auth Guard ────────────────────────────────────────────
@@ -217,7 +217,7 @@ function ChatPage({ onLogout }) {
     setMessages((m) => [...m, { role: "user", content: query }]);
     setLoading(true);
     try {
-      const data = await ask(query);
+      const data = await chat(query);
       setMessages((m) => [...m, { role: "assistant", content: data.answer, mode: data.mode }]);
     } catch (err) {
       if (err.message.includes("401")) {
