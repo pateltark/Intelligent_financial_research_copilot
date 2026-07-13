@@ -6,10 +6,10 @@ from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel
 from jose import JWTError
 
-from sec_agent import ask as sec_ask
-from rag import create_vectorstore, ask_llm
+from agent.llm_agent import ask
+from rag.emb_chunks import create_vectorstore
 from auth import hash_password, verify_password, create_access_token, decode_token
-from db import save_user_info, get_user_by_email, save_chat, save_emb
+from rag.db import save_user_info, get_user_by_email, save_chat, save_emb, has_pdf, save_doc_info
 
 app = FastAPI(title="SEC Edgar Research API")
 
@@ -23,9 +23,6 @@ app.add_middleware(
 
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
-
-
-pdf_ready = False
 
 
 class QueryRequest(BaseModel):
@@ -73,13 +70,12 @@ def login(body: LoginRequest):
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "pdf_ready": pdf_ready}
+    return {"status": "ok"}
 
 
 
 @app.post("/upload")
 async def upload_pdf(file: UploadFile = File(...), user=Depends(get_current_user)):
-    global pdf_ready
     if file.content_type != "application/pdf":
         raise HTTPException(status_code=400, detail="Only PDF files accepted.")
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
@@ -87,6 +83,7 @@ async def upload_pdf(file: UploadFile = File(...), user=Depends(get_current_user
         tmp_path = tmp.name
     try:
         create_vectorstore(tmp_path, user["sub"])
+        save_doc_info(user["sub"], tmp_path)
         pdf_ready = True
     finally:
         os.unlink(tmp_path)
@@ -95,66 +92,20 @@ async def upload_pdf(file: UploadFile = File(...), user=Depends(get_current_user
 
 @app.delete("/upload")
 def clear_pdf(user=Depends(get_current_user)):
-    global pdf_ready
+
     pdf_ready = False
     return {"message": "PDF cleared."}
 
 
-@app.post("/ask/sec")
-def ask_sec(body: QueryRequest, user=Depends(get_current_user)):
-    try:
-        answer = sec_ask(body.query, user["sub"])
 
-        save_chat(user["sub"], "user", body.query)
-        save_chat(user["sub"], "ai", answer)
+@app.post("/chat")
+async def chat(request: QueryRequest, user=Depends(get_current_user)):
 
-        return {"mode": "sec", "answer": answer}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    answer = ask(
+    question=request.query,
+    user_id=user["sub"]   # see next problem
+    )
 
-
-@app.post("/ask/rag")
-def ask_rag(body: QueryRequest, user=Depends(get_current_user)):
-    if not pdf_ready:
-        raise HTTPException(status_code=400, detail="No PDF uploaded yet.")
-    try:
-        answer = ask_llm(body.query, user['sub'])
-
-        save_chat(user["sub"], "user", body.query)
-        save_chat(user["sub"], "ai", answer)
-        
-        return {"mode": "rag", "answer": answer}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/ask")
-def ask_auto(body: QueryRequest, user=Depends(get_current_user)):
-    q = body.query.lower()
-    doc_hints = ["this document", "this report", "this pdf", "uploaded", "according to", "in the file"]
-    sec_keywords = [
-        "10-k", "10-q", "8-k", "sec", "edgar", "filing",
-        "revenue", "net income", "earnings", "annual report",
-        "quarterly", "ticker", "stock", "ipo", "s-1", "proxy",
-    ]
-    if pdf_ready and any(h in q for h in doc_hints):
-        mode = "rag"
-    elif not pdf_ready:
-        mode = "sec"
-    elif any(kw in q for kw in sec_keywords):
-        mode = "sec"
-    else:
-        mode = "rag" if pdf_ready else "sec"
-    try:
-        if mode == "sec":
-            answer = sec_ask(body.query, user["sub"])
-        else:
-            answer = ask_llm(body.query, user["sub"])
-
-        save_chat(user["sub"], "user", body.query)
-        save_chat(user["sub"], "ai", answer)
-
-        return {"mode": mode, "answer": answer}
-    
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    return {
+        "answer": answer
+    }
