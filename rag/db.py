@@ -2,6 +2,7 @@ import psycopg2
 from sentence_transformers import SentenceTransformer
 from dotenv import load_dotenv
 import json
+import uuid
 
 load_dotenv()
 
@@ -37,6 +38,7 @@ create_vector_table = """
         user_id TEXT NOT NULL,
         content TEXT NOT NULL,
         embedding VECTOR(384),
+        source TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
 """
@@ -74,20 +76,20 @@ def save_user_info(user_id, email, pass_word, name):
 def save_doc_info(user_id, pdf_name):
     cursor.execute(
         """
-        INSERT INTO doc_table (user_id, filename)
-        VALUES (%s, %s)
+        INSERT INTO documents (id, user_id, filename)
+        VALUES (%s, %s, %s)
         """,
-        (user_id, pdf_name)
+        (str(uuid.uuid4()), user_id, pdf_name)
     )
 
 
 
 
-def save_emb(content, user_id, embedding):
+def save_emb(content, user_id, embedding, source=None):
     emb_json = json.dumps(embedding)
     cursor.execute(
-        "INSERT INTO chat_emb (content, user_id, embedding) VALUES (%s, %s, %s)",
-        (content, user_id, emb_json)
+        "INSERT INTO chat_emb (content, user_id, embedding, source) VALUES (%s, %s, %s, %s)",
+        (content, user_id, emb_json, source)
     )
 
 def save_chat(user_id, role, content):
@@ -124,7 +126,7 @@ def load_chat(user_id):
 
     for role, content in rows:
         messages.append({
-            "role": "user" if role == "user" else "ai",
+            "role": "user" if role == "user" else "assistant",
             "content": content
         })
 

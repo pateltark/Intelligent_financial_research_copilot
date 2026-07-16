@@ -1,5 +1,3 @@
-import json
-
 from sec.edgar import (
     fetch_sec_filings,
     download_doc,
@@ -10,15 +8,21 @@ from rag.emb_chunks import ingest_text
 from rag.retrieve import get_retrieve
 
 
-def run_tool(name, args, user_id):
+def run_tool(tool_name, tool_args, user_id):
 
-    if name == "fetch_sec_document":
+    if tool_name == "fetch_sec_document":
 
         filings = fetch_sec_filings(
-            ticker=args["ticker"],
-            form_type=args["form_type"],
+            ticker=tool_args["ticker"],
+            form_type=tool_args["form_type"],
             n=1
         )
+
+        if not filings:
+            return (
+                f"No {tool_args['form_type']} filing found "
+                f"for {tool_args['ticker']}."
+            )
 
         filing = filings[0]
 
@@ -35,19 +39,20 @@ def run_tool(name, args, user_id):
             source=filing["filename"]
         )
 
-        return "Document indexed successfully."
+        return (
+            f"Indexed {filing['filename']} successfully."
+        )
 
 
 
-    elif name == "retrieve_documents":
+    elif tool_name == "retrieve_documents":
 
         context = get_retrieve(
-            question=args["question"],
+            question=tool_args["question"],
             user_id=user_id
         )
 
         return context
 
 
-
-    return "Unknown tool."
+    return f"Unknown tool: {tool_name}"
