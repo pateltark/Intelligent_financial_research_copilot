@@ -1,4 +1,64 @@
 TOOLS = [
+
+        {
+        "type": "function",
+        "function": {
+            "name": "extract_document",
+
+            "description": (
+                "Extract the SEC document requested by the user."
+            ),
+
+            "parameters": {
+                "type": "object",
+
+                "properties": {
+
+                    "documents": {
+
+                        "type": "array",
+
+                        "items": {
+
+                            "type": "object",
+
+                            "properties": {
+
+                                "company": {
+                                    "type": "string"
+                                },
+
+                                "ticker": {
+                                    "type": "string"
+                                },
+
+                                "form_type": {
+                                    "type": "string",
+                                    "enum": [
+                                        "10-K",
+                                        "10-Q",
+                                        "8-K",
+                                        "DEF 14A",
+                                        "S-1"
+                                    ]
+                                },
+
+                                "period": {
+                                    "type": "string"
+                                }
+
+                            }
+                        }
+                    }
+                },
+
+                "required": [
+                    "documents"
+                ]
+            }
+        }
+    },
+
     {
         "type": "function",
         "function": {

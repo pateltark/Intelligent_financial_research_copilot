@@ -17,22 +17,43 @@ client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 SYSTEM_PROMPT = """
 You are a financial research assistant.
 
-You have access to tools.
+You have access to three tools.
 
-Guidelines:
+1. extract_document
+   Use this tool ONLY to identify which SEC filing the user is referring to.
 
-- If the answer can be found in indexed documents,
-  use retrieve_documents.
+   Always return:
 
-- If the user needs an SEC filing that is not indexed,
-  use fetch_sec_document first.
+   {
+     "documents": [
+       {
+         "company": "",
+         "ticker": "",
+         "form_type": "",
+         "period": ""
+       }
+     ]
+   }
 
-- After fetching a document,
-  retrieve the relevant context before answering.
+   Even if there is only one company,
+   documents MUST be an array.
 
-- Never invent financial numbers.
+   If the user is not requesting SEC filings,
+   return:
 
-- Use tools whenever necessary.
+   {
+     "documents": []
+   }
+
+2. fetch_sec_document
+   Download and index an SEC filing when it is not already available.
+
+3. retrieve_documents
+   Search indexed documents to answer the user's question.
+
+Never invent financial numbers.
+
+Always use retrieved context when answering.
 """
 
 
@@ -49,13 +70,12 @@ def ask(question: str, user_id: str):
         }
     ]
 
-    # Load previous conversation
+    # Previous conversation
     for msg in chat:
 
         role = msg["role"].lower()
 
-        # Groq only accepts these roles
-        if role not in ["system", "user", "assistant", "tool"]:
+        if role not in ("system", "user", "assistant", "tool"):
             continue
 
         messages.append({
@@ -69,7 +89,6 @@ def ask(question: str, user_id: str):
         "content": question
     })
 
-    # Save user message
     save_chat(user_id, "user", question)
 
     MAX_ITERATIONS = 5
@@ -90,7 +109,7 @@ def ask(question: str, user_id: str):
         # Final answer
         if not assistant_msg.tool_calls:
 
-            answer = assistant_msg.content
+            answer = assistant_msg.content or ""
 
             save_chat(
                 user_id=user_id,
@@ -100,10 +119,10 @@ def ask(question: str, user_id: str):
 
             return answer
 
-        # Add assistant tool-call message
+        # Add assistant message containing tool calls
         messages.append(assistant_msg)
 
-        # Execute all requested tools
+        # Execute tools
         for tool_call in assistant_msg.tool_calls:
 
             tool_name = tool_call.function.name
@@ -111,14 +130,14 @@ def ask(question: str, user_id: str):
 
             tool_result = run_tool(
                 tool_name=tool_name,
-                tool_input=tool_args,
+                tool_args=tool_args,
                 user_id=user_id
             )
 
             messages.append({
                 "role": "tool",
                 "tool_call_id": tool_call.id,
-                "content": tool_result
+                "content": str(tool_result)
             })
 
     return "Maximum tool iterations reached."
