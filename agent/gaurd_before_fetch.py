@@ -1,13 +1,21 @@
+#planner.py
+
+import sys
+from pathlib import Path
+
+# Add project root (intelligent_financial_research_copilot) to sys.path
+sys.path.append(str(Path(__file__).resolve().parent.parent))
+
 from typing import Literal
 
 from pydantic import BaseModel
 from groq import Groq
 from dotenv import load_dotenv
-
+from rag.db import get_sec_document, save_sec_vector
+from agent.tools import TOOLS
 import json
 import os
 
-from tools import TOOLS
 
 load_dotenv()
 
@@ -153,49 +161,54 @@ def planner(question: str) -> PlannerOutput:
     return PlannerOutput.model_validate(args)
 
 
+
+#planner LLM
+
+
+# Checks if que relted doc available or not in db.
+
+# def check_avail_sec_doc(extract_sec_text):
+#     extrat_sec_text = planner(que)
+#     first_doc = extrat_sec_text.documents[0]
+
+#     ticker = first_doc.ticker
+#     form_type = first_doc.form_type
+#     print (ticker,form_type)
+#     downloaded_row = get_sec_document(ticker, form_type)
+    
+#     if downloaded_row is None:
+#         print("none")
+#         return None
+#     else:
+#         print (downloaded_row)
+#         return downloaded_row
+
+
+def check_avail_sec_doc(planner_output):
+
+    results = []
+
+    for doc in planner_output.documents:  # doc = ticker, form_type.. 
+
+        db_row = get_sec_document(
+            ticker=doc.ticker,
+            form_type=doc.form_type
+        )
+
+        results.append({
+            "request": doc,
+            "db_row": db_row
+        })
+
+    return results
+
 # ======================================================
 # Test
 # ======================================================
 
 if __name__ == "__main__":
+    test_query = "can u give me latest TESLA 10-k news ?"
 
-    tests = [
+    has_doc = check_avail_sec_doc(test_query)
 
-        "Tesla revenue",
-
-        "Latest SEC news about Apple",
-
-        "What did Microsoft say about AI in its last quarterly report?",
-
-        "Show NVIDIA annual report",
-
-        "Compare Tesla and Apple revenue",
-
-        "Hello",
-
-        "What is AI?"
-
-    ]
-
-    for q in tests:
-
-        print("\n" + "=" * 80)
-
-        print(q)
-
-        try:
-
-            result = planner(q)
-
-            print("\nParsed\n")
-
-            print(
-                json.dumps(
-                    result.model_dump(),
-                    indent=4
-                )
-            )
-
-        except Exception as e:
-
-            print(e)
+    print(has_doc)
