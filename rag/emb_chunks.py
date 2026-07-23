@@ -7,7 +7,7 @@ from groq import Groq
 import os
 from dotenv import load_dotenv
 
-from rag.db import save_emb, related_chunks, load_chat
+from rag.db import save_emb, related_chunks, load_chat, save_sec_vector, related_sec_chunks
 
 load_dotenv()
 
@@ -38,6 +38,36 @@ def ingest_text(text: str, user_id: str, source: str = None):
         )
 
     return True
+
+
+
+def ingest_sec_text(
+    text,
+    document_id,
+    ticker,
+    form_type,
+    filename,
+):
+    
+    splitter = RecursiveCharacterTextSplitter(
+    chunk_size=1000, 
+    chunk_overlap=200,
+)
+    chunks = splitter.split_text(text)
+
+    embeddings = model.encode(chunks)
+
+    for i, (chunk, embedding) in enumerate(zip(chunks, embeddings)):
+
+        save_sec_vector(
+                document_id=document_id,
+                ticker=ticker,
+                form_type=form_type,
+                filename=filename,
+                chunk_index=i,
+                content=chunk,
+                embedding=embedding.tolist()
+            )
 
 
 def create_vectorstore(pdf_path, user_id, source=None):
