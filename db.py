@@ -74,7 +74,7 @@ def save_user_info(user_id, email, pass_word, name):
 def save_doc_info(user_id, pdf_name):
     cursor.execute(
         """
-        INSERT INTO doc_table (user_id, filename)
+        INSERT INTO documents (user_id, filename)
         VALUES (%s, %s)
         """,
         (user_id, pdf_name)

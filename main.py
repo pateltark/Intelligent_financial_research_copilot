@@ -6,7 +6,7 @@ from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel
 from jose import JWTError
 
-from agent.llm_agent import ask
+from agent.llm_agent import ask_upload,ask_sec
 from rag.emb_chunks import create_vectorstore
 from auth import hash_password, verify_password, create_access_token, decode_token
 from rag.db import save_user_info, get_user_by_email, save_chat, save_emb, has_pdf, save_doc_info
@@ -26,7 +26,8 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 
 
 class QueryRequest(BaseModel):
-    query: str
+    question: str
+    # document_id: str | None = None
 
 class RegisterRequest(BaseModel):
     user_id: str
@@ -78,16 +79,18 @@ def health():
 async def upload_pdf(file: UploadFile = File(...), user=Depends(get_current_user)):
     if file.content_type != "application/pdf":
         raise HTTPException(status_code=400, detail="Only PDF files accepted.")
+
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
         tmp.write(await file.read())
         tmp_path = tmp.name
+
     try:
-        create_vectorstore(tmp_path, user["sub"])
-        save_doc_info(user["sub"], tmp_path)
-        pdf_ready = True
+        doc_id = save_doc_info(user["sub"], file.filename)  # real filename, get id back FIRST
+        create_vectorstore(tmp_path, user["sub"], document_id=doc_id)  # then embed, tagged with doc_id
     finally:
         os.unlink(tmp_path)
-    return {"message": "PDF indexed successfully."}
+
+    return {"message": "PDF indexed successfully.", "document_id": doc_id}
 
 
 @app.delete("/upload")
@@ -98,14 +101,33 @@ def clear_pdf(user=Depends(get_current_user)):
 
 
 
-@app.post("/chat")
-async def chat(request: QueryRequest, user=Depends(get_current_user)):
-
-    answer = ask(
-    question=request.query,
-    user_id=user["sub"]   # see next problem
+@app.post("/chat/doc")
+async def chat_with_doc(req: QueryRequest, user=Depends(get_current_user)):
+    user_id = user["sub"]
+    
+    # Save user message to history
+    save_chat(user_id=user_id, role="user", content=req.question)
+    
+    # Generate Answer
+    answer = ask_upload(
+        question=req.question, 
+        user_id=user_id, 
+        document_id=req.document_id
     )
+    
+    # Save bot answer to history
+    save_chat(user_id=user_id, role="assistant", content=answer)
+    
+    return {"answer": answer}
 
-    return {
-        "answer": answer
-    }
+
+
+@app.post("/chat/sec")
+async def chat_with_sec(req: QueryRequest, user=Depends(get_current_user)):
+    user_id = user["sub"]
+    
+    save_chat(user_id=user_id, role="user", content=req.question)
+    answer = ask_sec(question=req.question, user_id=user_id)
+    save_chat(user_id=user_id, role="assistant", content=answer)
+    
+    return {"answer": answer}

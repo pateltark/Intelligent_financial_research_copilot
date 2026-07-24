@@ -61,13 +61,24 @@ export async function clearPDF() {
     return data;
 }
 
-export async function chat(query) {
-    const res = await fetch(`${BASE}/chat`, {
+export async function chatSEC(question) {
+    const res = await fetch(`${BASE}/chat/sec`, {
         method: "POST",
         headers: authHeaders(),
-        body: JSON.stringify({ query }),
+        body: JSON.stringify({ question }),
     });
     const data = await res.json();
-    if (!res.ok) throw new Error(data.detail || "Query failed.");
+    if (!res.ok) throw new Error(data.detail || "SEC query failed.");
+    return data;
+}
+
+export async function chatDoc(question) {
+    const res = await fetch(`${BASE}/chat/doc`, {
+        method: "POST",
+        headers: authHeaders(),
+        body: JSON.stringify({ question }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || "Document query failed.");
     return data;
 }
