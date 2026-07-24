@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { register, login, logout, chat, uploadPDF, clearPDF } from "./api.js";
+import { register, login, logout, chatSEC, chatDoc, uploadPDF, clearPDF } from "./api.js";
 import "./App.css";
 
 // ── Auth Guard ────────────────────────────────────────────
@@ -8,15 +8,18 @@ function isLoggedIn() {
 }
 
 // ── PDF Upload Component ──────────────────────────────────
-function PDFUpload({ pdfReady, setPdfReady, setError }) {
+function PDFUpload({ pdfReady, setPdfReady, setError, onUploadSuccess }) {
   const inputRef = useRef(null);
 
   async function handleFile(e) {
     const file = e.target.files?.[0];
     if (!file) return;
     try {
-      await uploadPDF(file);
+      const data = await uploadPDF(file);
       setPdfReady(true);
+      if (onUploadSuccess && data.document_id) {
+        onUploadSuccess(data.document_id);
+      }
     } catch (err) {
       setError(err.message);
     }
@@ -68,7 +71,7 @@ function MessageBubble({ message }) {
 }
 
 // ── Chat Window Component ─────────────────────────────────
-function ChatWindow({ messages, loading }) {
+function ChatWindow({ messages, loading, chatMode }) {
   const bottomRef = useRef(null);
 
   useEffect(() => {
@@ -79,8 +82,17 @@ function ChatWindow({ messages, loading }) {
     return (
       <div className="chat-window chat-empty">
         <span className="chat-empty-icon">◈</span>
-        <p>Ask about SEC filings, or upload a PDF and query it.</p>
-        <p className="chat-empty-hint">Try: "What was Apple's revenue in the latest 10-K?"</p>
+        {chatMode === "sec" ? (
+          <>
+            <p>Ask about SEC filings for public companies.</p>
+            <p className="chat-empty-hint">Try: "What was Tesla's revenue in their latest 10-K?"</p>
+          </>
+        ) : (
+          <>
+            <p>Upload a PDF above and ask questions about its content.</p>
+            <p className="chat-empty-hint">Try: "Summarize key risk factors in this document."</p>
+          </>
+        )}
       </div>
     );
   }
@@ -101,7 +113,7 @@ function ChatWindow({ messages, loading }) {
 }
 
 // ── Chat Input Component ──────────────────────────────────
-function ChatInput({ onSend, disabled }) {
+function ChatInput({ onSend, disabled, placeholder }) {
   const [value, setValue] = useState("");
 
   function handleKeyDown(e) {
@@ -122,7 +134,7 @@ function ChatInput({ onSend, disabled }) {
     <div className="chat-input-bar">
       <textarea
         className="chat-textarea"
-        placeholder="Ask about filings, or query your PDF…"
+        placeholder={placeholder || "Ask a question..."}
         value={value}
         onChange={(e) => setValue(e.target.value)}
         onKeyDown={handleKeyDown}
@@ -210,15 +222,25 @@ function ChatPage({ onLogout }) {
   const [messages, setMessages] = useState([]);
   const [loading, setLoading] = useState(false);
   const [pdfReady, setPdfReady] = useState(false);
+  const [documentId, setDocumentId] = useState(null);
+  const [chatMode, setChatMode] = useState("sec"); // "sec" | "doc"
   const [error, setError] = useState("");
 
-  async function handleSend(query) {
+  async function handleSend(question) {
     setError("");
-    setMessages((m) => [...m, { role: "user", content: query }]);
+    setMessages((m) => [...m, { role: "user", content: question }]);
     setLoading(true);
     try {
-      const data = await chat(query);
-      setMessages((m) => [...m, { role: "assistant", content: data.answer, mode: data.mode }]);
+      let data;
+      if (chatMode === "sec") {
+        data = await chatSEC(question);
+      } else {
+        data = await chatDoc(question);
+      }
+      setMessages((m) => [
+        ...m,
+        { role: "assistant", content: data.answer, mode: chatMode },
+      ]);
     } catch (err) {
       if (err.message.includes("401")) {
         onLogout();
@@ -237,8 +259,31 @@ function ChatPage({ onLogout }) {
           <span className="header-logo">◈</span>
           <span className="header-brand">Research Copilot</span>
         </div>
+
+        <div className="mode-selector">
+          <button
+            className={`mode-btn ${chatMode === "sec" ? "active" : ""}`}
+            onClick={() => setChatMode("sec")}
+          >
+            🏛️ SEC Agent
+          </button>
+          <button
+            className={`mode-btn ${chatMode === "doc" ? "active" : ""}`}
+            onClick={() => setChatMode("doc")}
+          >
+            📄 PDF RAG
+          </button>
+        </div>
+
         <div className="header-right">
-          <PDFUpload pdfReady={pdfReady} setPdfReady={setPdfReady} setError={setError} />
+          {chatMode === "doc" && (
+            <PDFUpload
+              pdfReady={pdfReady}
+              setPdfReady={setPdfReady}
+              setError={setError}
+              onUploadSuccess={(id) => setDocumentId(id)}
+            />
+          )}
           <button className="btn-logout" onClick={onLogout}>Sign out</button>
         </div>
       </header>
@@ -250,8 +295,18 @@ function ChatPage({ onLogout }) {
         </div>
       )}
 
-      <ChatWindow messages={messages} loading={loading} />
-      <ChatInput onSend={handleSend} disabled={loading} />
+      <ChatWindow messages={messages} loading={loading} chatMode={chatMode} />
+      <ChatInput
+        onSend={handleSend}
+        disabled={loading || (chatMode === "doc" && !pdfReady)}
+        placeholder={
+          chatMode === "sec"
+            ? "Ask SEC Agent about filings (e.g. 10-K, 10-Q)..."
+            : pdfReady
+              ? "Ask questions about uploaded PDF..."
+              : "Please upload a PDF first to ask questions..."
+        }
+      />
     </div>
   );
 }
