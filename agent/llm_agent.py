@@ -34,8 +34,7 @@ client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
 
 
-
-def generate_answer(question: str, context_chunks) -> str:
+def generate_answer(question: str, context_chunks, user_id: str) -> str:
     # 1. Guard against empty context
     if not context_chunks or context_chunks == "No relevant SEC context found.":
         return "I couldn't find relevant information in the database to answer your question."
@@ -54,21 +53,28 @@ def generate_answer(question: str, context_chunks) -> str:
 
     formatted_context = "\n\n---\n\n".join(flat_chunks)
 
-    # 3. Construct the RAG prompt
-    prompt = f"""You are an expert financial research assistant. Answer the question using ONLY the provided context below.
+    # 3. Load recent chat history (last 6 messages / 3 turns)
+    history = load_chat(user_id)[-6:]
+    formatted_history = ""
+    if history:
+        history_lines = [f"{msg['role'].capitalize()}: {msg['content']}" for msg in history]
+        formatted_history = "RECENT CHAT HISTORY:\n" + "\n".join(history_lines) + "\n\n---\n\n"
 
-DOCUMENT CONTEXT:
+    # 4. Construct the RAG prompt with History
+    prompt = f"""You are an expert financial research assistant. Answer the question using ONLY the provided context and conversation history below.
+
+{formatted_history}DOCUMENT CONTEXT:
 {formatted_context}
 
 USER QUESTION:
 {question}
 
 INSTRUCTIONS:
-- Give a concise, clear answer based strictly on the provided context.
+- Give a concise, clear answer based strictly on the provided context and previous history.
 - If the answer is not present in the context, explicitly state "The provided document context does not contain enough information to answer this question."
 """
 
-    # 4. Query Groq API
+    # 5. Query Groq API
     response = client.chat.completions.create(
         model="llama-3.3-70b-versatile",  # Recommended model on Groq
         messages=[
@@ -138,7 +144,7 @@ def ask_sec(question: str, user_id: str):
         if doc_chunks:
             sec_chunks.append(doc_chunks)
 
-    llm_ans = generate_answer(question, sec_chunks)
+    llm_ans = generate_answer(question, sec_chunks, user_id=user_id)
 
     return llm_ans if sec_chunks else "No relevant SEC context found."
 
@@ -147,13 +153,13 @@ def ask_sec(question: str, user_id: str):
 
 # print(test)
 
-def ask_upload(question, pdf_path:str, user_id: str):
+def ask_upload(question, pdf_path:str, user_id: str, document_id: str = None):
 
     create_vectorstore(pdf_path, user_id) # -> for extracting Texts from PDF and devide into chunks
     save_doc_info(user_id, pdf_path)              # -> saving doc into DB
-    rtld_chunks = related_chunks(user_id, question) # -> search and return similar chunks
+    rtld_chunks = related_chunks(user_id, question, document_id=document_id) # -> search and return similar chunks
 
-    llm_ans = generate_answer(question, rtld_chunks)
+    llm_ans = generate_answer(question, rtld_chunks, user_id=user_id)
     return llm_ans
 
 

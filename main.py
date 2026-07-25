@@ -27,7 +27,7 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 
 class QueryRequest(BaseModel):
     question: str
-    # document_id: str | None = None
+    document_id: str | None = None
 
 class RegisterRequest(BaseModel):
     user_id: str
