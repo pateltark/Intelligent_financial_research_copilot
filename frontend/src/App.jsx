@@ -219,16 +219,25 @@ function LoginPage({ onLogin }) {
 
 // ── Chat Page ─────────────────────────────────────────────
 function ChatPage({ onLogout }) {
-  const [messages, setMessages] = useState([]);
+  const [secMessages, setSecMessages] = useState([]);
+  const [docMessages, setDocMessages] = useState([]);
   const [loading, setLoading] = useState(false);
   const [pdfReady, setPdfReady] = useState(false);
   const [documentId, setDocumentId] = useState(null);
   const [chatMode, setChatMode] = useState("sec"); // "sec" | "doc"
   const [error, setError] = useState("");
 
+  const messages = chatMode === "sec" ? secMessages : docMessages;
+
   async function handleSend(question) {
     setError("");
-    setMessages((m) => [...m, { role: "user", content: question }]);
+    const userMessage = { role: "user", content: question };
+    if (chatMode === "sec") {
+      setSecMessages((msgs) => [...msgs, userMessage]);
+    } else {
+      setDocMessages((msgs) => [...msgs, userMessage]);
+    }
+
     setLoading(true);
     try {
       let data;
@@ -237,10 +246,18 @@ function ChatPage({ onLogout }) {
       } else {
         data = await chatDoc(question);
       }
-      setMessages((m) => [
-        ...m,
-        { role: "assistant", content: data.answer, mode: chatMode },
-      ]);
+
+      const assistantMessage = {
+        role: "assistant",
+        content: data.answer,
+        mode: chatMode,
+      };
+
+      if (chatMode === "sec") {
+        setSecMessages((msgs) => [...msgs, assistantMessage]);
+      } else {
+        setDocMessages((msgs) => [...msgs, assistantMessage]);
+      }
     } catch (err) {
       if (err.message.includes("401")) {
         onLogout();
