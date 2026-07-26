@@ -10,7 +10,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from agent.llm_agent import ask_upload,ask_sec
 from rag.emb_chunks import create_vectorstore
 from auth import hash_password, verify_password, create_access_token, decode_token
-from rag.db import save_user_info, get_user_by_email, save_chat, save_emb, save_doc_info
+from rag.db import save_user_info, get_user_by_email, save_chat, save_emb, save_doc_info, get_user_documents
 
 app = FastAPI(title="SEC Edgar Research API")
 
@@ -41,6 +41,9 @@ class LoginRequest(BaseModel):
     email: str
     password: str
 
+class DocumentOut(BaseModel):
+    id: str
+    filename: str
 
 # def get_current_user(token: str = Depends(oauth2_scheme)):
 #     try:
@@ -58,7 +61,12 @@ def get_current_user(
         return payload
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid or expired token.")
+    
 
+
+@app.get("/documents", response_model=list[DocumentOut])
+def list_documents(user=Depends(get_current_user)):
+    return get_user_documents(user["sub"])
 
 
 @app.post("/auth/register")
@@ -124,7 +132,7 @@ async def chat_with_doc(req: QueryRequest, user=Depends(get_current_user)):
     answer = ask_upload(
         question=req.question, 
         user_id=user_id, 
-        ocument_ids=req.document_ids
+        document_ids=req.document_ids
     )
     
     # Save bot answer to history under 'doc' mode
@@ -145,3 +153,5 @@ async def chat_with_sec(req: QueryRequest, user=Depends(get_current_user)):
     save_chat(user_id=user_id, role="assistant", content=answer, mode="sec")
     
     return {"answer": answer}
+
+

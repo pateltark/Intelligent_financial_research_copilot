@@ -217,9 +217,9 @@ def related_chunks(user_id, question, k=3, document_ids=None):
     if document_ids:
         cursor.execute(
             """
-            SELECT content, embedding <=> %s::vector AS distance
+            SELECT content, document_id, embedding <=> %s::vector AS distance
             FROM chat_emb
-            WHERE user_id = %s AND document_id = %s
+            WHERE user_id = %s AND document_id = ANY(%s)
             ORDER BY distance
             LIMIT %s
             """,
@@ -228,7 +228,7 @@ def related_chunks(user_id, question, k=3, document_ids=None):
     else:
         cursor.execute(
             """
-            SELECT content, embedding <=> %s::vector AS distance
+            SELECT content, document_id, embedding <=> %s::vector AS distance
             FROM chat_emb
             WHERE user_id = %s
             ORDER BY distance
@@ -237,6 +237,7 @@ def related_chunks(user_id, question, k=3, document_ids=None):
             (json.dumps(query_embedding), user_id, k)
         )
     return cursor.fetchall()
+
 
 
 def get_user_by_email(email):
@@ -290,3 +291,37 @@ def save_sec_document(ticker, form_type, filed_at, filename, url, path):
         (ticker, form_type, filed_at)
     )
     return cursor.fetchone()[0]
+
+
+def get_user_documents(user_id):
+    cursor.execute(
+        """
+        SELECT id, filename
+        FROM documents
+        WHERE user_id = %s
+        ORDER BY uploaded_at DESC
+        """,
+        (user_id,)
+    )
+    rows = cursor.fetchall()
+    return [{"id": row[0], "filename": row[1]} for row in rows]
+
+
+def related_chunks_per_doc(user_id, question, document_ids, k_per_doc=4):
+    query_embedding = model.encode(question).tolist()
+    results = []
+    for doc_id in document_ids:
+        cursor.execute(
+            """
+            SELECT ce.content, ce.document_id, d.filename,
+                   ce.embedding <=> %s::vector AS distance
+            FROM chat_emb ce
+            JOIN documents d ON d.id = ce.document_id
+            WHERE ce.user_id = %s AND ce.document_id = %s
+            ORDER BY distance
+            LIMIT %s
+            """,
+            (json.dumps(query_embedding), user_id, doc_id, k_per_doc)
+        )
+        results.append(cursor.fetchall())
+    return results

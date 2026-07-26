@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { register, login, logout, chatSEC, chatDoc, uploadPDF, clearPDF } from "./api.js";
+import { register, login, logout, chatSEC, chatDoc, uploadPDF, listDocuments } from "./api.js";
 import "./App.css";
 
 // ── Auth Guard ────────────────────────────────────────────
@@ -8,27 +8,15 @@ function isLoggedIn() {
 }
 
 // ── PDF Upload Component ──────────────────────────────────
-function PDFUpload({ pdfReady, setPdfReady, setError, onUploadSuccess }) {
+function PDFUpload({ onUploaded, setError }) {
   const inputRef = useRef(null);
 
   async function handleFile(e) {
     const file = e.target.files?.[0];
     if (!file) return;
     try {
-      const data = await uploadPDF(file);
-      setPdfReady(true);
-      if (onUploadSuccess && data.document_id) {
-        onUploadSuccess(data.document_id);
-      }
-    } catch (err) {
-      setError(err.message);
-    }
-  }
-
-  async function handleClear() {
-    try {
-      await clearPDF();
-      setPdfReady(false);
+      await uploadPDF(file);
+      onUploaded();
       if (inputRef.current) inputRef.current.value = "";
     } catch (err) {
       setError(err.message);
@@ -37,19 +25,46 @@ function PDFUpload({ pdfReady, setPdfReady, setError, onUploadSuccess }) {
 
   return (
     <div className="pdf-upload">
-      {pdfReady ? (
-        <div className="pdf-loaded">
-          <span className="pdf-dot" />
-          <span>PDF loaded</span>
-          <button className="btn-clear" onClick={handleClear}>✕ Clear</button>
-        </div>
-      ) : (
-        <>
-          <input ref={inputRef} type="file" accept=".pdf" id="pdf-input" onChange={handleFile} />
-          <label htmlFor="pdf-input" className="btn-upload">↑ Upload PDF</label>
-        </>
-      )}
+      <input ref={inputRef} type="file" accept=".pdf" id="pdf-input" onChange={handleFile} />
+      <label htmlFor="pdf-input" className="btn-upload">↑ Upload PDF</label>
     </div>
+  );
+}
+
+// ── Document Sidebar Component ─────────────────────────────
+function DocSidebar({ documents, selectedIds, onToggle, onSelectAll, onClearAll }) {
+  if (documents.length === 0) {
+    return (
+      <aside className="doc-sidebar">
+        <div className="doc-sidebar-empty">No PDFs uploaded yet.</div>
+      </aside>
+    );
+  }
+
+  return (
+    <aside className="doc-sidebar">
+      <div className="doc-sidebar-header">
+        <span>Your PDFs</span>
+        <div className="doc-sidebar-actions">
+          <button onClick={onSelectAll}>All</button>
+          <button onClick={onClearAll}>None</button>
+        </div>
+      </div>
+      <ul className="doc-list">
+        {documents.map((doc) => (
+          <li key={doc.id} className="doc-item">
+            <label>
+              <input
+                type="checkbox"
+                checked={selectedIds.includes(doc.id)}
+                onChange={() => onToggle(doc.id)}
+              />
+              <span className="doc-filename" title={doc.filename}>{doc.filename}</span>
+            </label>
+          </li>
+        ))}
+      </ul>
+    </aside>
   );
 }
 
@@ -89,8 +104,8 @@ function ChatWindow({ messages, loading, chatMode }) {
           </>
         ) : (
           <>
-            <p>Upload a PDF above and ask questions about its content.</p>
-            <p className="chat-empty-hint">Try: "Summarize key risk factors in this document."</p>
+            <p>Upload one or more PDFs and ask questions about their content.</p>
+            <p className="chat-empty-hint">Try: "Compare the risk factors in these two documents."</p>
           </>
         )}
       </div>
@@ -222,12 +237,42 @@ function ChatPage({ onLogout }) {
   const [secMessages, setSecMessages] = useState([]);
   const [docMessages, setDocMessages] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [pdfReady, setPdfReady] = useState(false);
-  const [documentId, setDocumentId] = useState(null);
+  const [documents, setDocuments] = useState([]);
+  const [selectedDocIds, setSelectedDocIds] = useState([]);
   const [chatMode, setChatMode] = useState("sec"); // "sec" | "doc"
   const [error, setError] = useState("");
 
   const messages = chatMode === "sec" ? secMessages : docMessages;
+
+  async function refreshDocuments() {
+    try {
+      const docs = await listDocuments();
+      setDocuments(docs);
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  // Load the user's PDF list whenever they switch into PDF RAG mode
+  useEffect(() => {
+    if (chatMode === "doc") {
+      refreshDocuments();
+    }
+  }, [chatMode]);
+
+  function toggleDoc(id) {
+    setSelectedDocIds((ids) =>
+      ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id]
+    );
+  }
+
+  function selectAllDocs() {
+    setSelectedDocIds(documents.map((d) => d.id));
+  }
+
+  function clearDocSelection() {
+    setSelectedDocIds([]);
+  }
 
   async function handleSend(question) {
     setError("");
@@ -244,7 +289,16 @@ function ChatPage({ onLogout }) {
       if (chatMode === "sec") {
         data = await chatSEC(question);
       } else {
-        data = await chatDoc(question);
+        // If the user hasn't checked anything, default to the most
+        // recently uploaded PDF (documents[0], since the API returns
+        // them sorted newest-first).
+        const effectiveIds =
+          selectedDocIds.length > 0
+            ? selectedDocIds
+            : documents[0]
+              ? [documents[0].id]
+              : [];
+        data = await chatDoc(question, effectiveIds);
       }
 
       const assistantMessage = {
@@ -269,8 +323,16 @@ function ChatPage({ onLogout }) {
     }
   }
 
+  function docPlaceholder() {
+    if (documents.length === 0) return "Upload a PDF first to ask questions...";
+    if (selectedDocIds.length > 0) {
+      return `Asking about ${selectedDocIds.length} selected document${selectedDocIds.length > 1 ? "s" : ""}...`;
+    }
+    return `Asking about most recently uploaded PDF (${documents[0].filename})...`;
+  }
+
   return (
-    <div className="chat-page">
+    <div className="chat-page-wrapper">
       <header className="chat-header">
         <div className="header-left">
           <span className="header-logo">◈</span>
@@ -294,12 +356,7 @@ function ChatPage({ onLogout }) {
 
         <div className="header-right">
           {chatMode === "doc" && (
-            <PDFUpload
-              pdfReady={pdfReady}
-              setPdfReady={setPdfReady}
-              setError={setError}
-              onUploadSuccess={(id) => setDocumentId(id)}
-            />
+            <PDFUpload onUploaded={refreshDocuments} setError={setError} />
           )}
           <button className="btn-logout" onClick={onLogout}>Sign out</button>
         </div>
@@ -312,18 +369,30 @@ function ChatPage({ onLogout }) {
         </div>
       )}
 
-      <ChatWindow messages={messages} loading={loading} chatMode={chatMode} />
-      <ChatInput
-        onSend={handleSend}
-        disabled={loading || (chatMode === "doc" && !pdfReady)}
-        placeholder={
-          chatMode === "sec"
-            ? "Ask SEC Agent about filings (e.g. 10-K, 10-Q)..."
-            : pdfReady
-              ? "Ask questions about uploaded PDF..."
-              : "Please upload a PDF first to ask questions..."
-        }
-      />
+      <div className="chat-body">
+        {chatMode === "doc" && (
+          <DocSidebar
+            documents={documents}
+            selectedIds={selectedDocIds}
+            onToggle={toggleDoc}
+            onSelectAll={selectAllDocs}
+            onClearAll={clearDocSelection}
+          />
+        )}
+
+        <div className="chat-main">
+          <ChatWindow messages={messages} loading={loading} chatMode={chatMode} />
+          <ChatInput
+            onSend={handleSend}
+            disabled={loading || (chatMode === "doc" && documents.length === 0)}
+            placeholder={
+              chatMode === "sec"
+                ? "Ask SEC Agent about filings (e.g. 10-K, 10-Q)..."
+                : docPlaceholder()
+            }
+          />
+        </div>
+      </div>
     </div>
   );
 }
