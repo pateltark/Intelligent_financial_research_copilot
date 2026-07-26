@@ -1,5 +1,16 @@
 import { useState, useEffect, useRef } from "react";
-import { register, login, logout, chatSEC, chatDoc, uploadPDF, listDocuments } from "./api.js";
+import {
+  register,
+  login,
+  logout,
+  chatSEC,
+  chatDoc,
+  uploadPDF,
+  listDocuments,
+  deleteDocument,
+  getSecActive,
+  listSecDocuments,
+} from "./api.js";
 import "./App.css";
 
 // ── Auth Guard ────────────────────────────────────────────
@@ -31,14 +42,22 @@ function PDFUpload({ onUploaded, setError }) {
   );
 }
 
-// ── Document Sidebar Component ─────────────────────────────
-function DocSidebar({ documents, selectedIds, onToggle, onSelectAll, onClearAll }) {
+// ── PDF Document Sidebar Component ─────────────────────────
+function DocSidebar({ documents, selectedIds, onToggle, onSelectAll, onClearAll, onDelete }) {
   if (documents.length === 0) {
     return (
       <aside className="doc-sidebar">
         <div className="doc-sidebar-empty">No PDFs uploaded yet.</div>
       </aside>
     );
+  }
+
+  function handleDeleteClick(e, doc) {
+    e.preventDefault(); // don't toggle the checkbox underneath
+    e.stopPropagation();
+    if (window.confirm(`Delete "${doc.filename}"? This can't be undone.`)) {
+      onDelete(doc.id);
+    }
   }
 
   return (
@@ -61,9 +80,79 @@ function DocSidebar({ documents, selectedIds, onToggle, onSelectAll, onClearAll 
               />
               <span className="doc-filename" title={doc.filename}>{doc.filename}</span>
             </label>
+            <button
+              className="doc-delete-btn"
+              title="Delete document"
+              onClick={(e) => handleDeleteClick(e, doc)}
+            >
+              🗑
+            </button>
           </li>
         ))}
       </ul>
+    </aside>
+  );
+}
+
+// ── SEC Sidebar Component ──────────────────────────────────
+// Informational only (no manual selection) — the planner decides which
+// filing(s) become active based on what the user asks for. This just
+// surfaces that state so the user can see what's currently in context.
+function SecSidebar({ activeDoc, activeSet, recentFilings }) {
+  const isComparing = activeSet && activeSet.length > 1;
+
+  return (
+    <aside className="doc-sidebar">
+      <div className="doc-sidebar-header">
+        <span>Active</span>
+      </div>
+
+      {activeDoc ? (
+        <div className="sec-active-block">
+          <div className="sec-active-pill">
+            <span className="sec-dot" />
+            {activeDoc.ticker} · {activeDoc.form_type}
+          </div>
+        </div>
+      ) : (
+        <div className="doc-sidebar-empty">
+          No active filing. Try "Show Tesla's latest 10-K".
+        </div>
+      )}
+
+      {isComparing && (
+        <>
+          <div className="doc-sidebar-header">
+            <span>Comparing</span>
+          </div>
+          <ul className="doc-list">
+            {activeSet.map((doc, i) => (
+              <li key={`${doc.document_id}-${i}`} className="doc-item sec-compare-item">
+                <span className="sec-dot" />
+                <span className="doc-filename">{doc.ticker} · {doc.form_type}</span>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+
+      <div className="doc-sidebar-header">
+        <span>Recently Fetched</span>
+      </div>
+      {recentFilings.length === 0 ? (
+        <div className="doc-sidebar-empty">Nothing fetched yet.</div>
+      ) : (
+        <ul className="doc-list">
+          {recentFilings.map((doc) => (
+            <li key={doc.id} className="doc-item sec-recent-item">
+              <span className="doc-filename" title={doc.filename}>
+                {doc.ticker} · {doc.form_type}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+      <p className="sec-sidebar-note">Shared across all users — not personal to your account.</p>
     </aside>
   );
 }
@@ -100,7 +189,7 @@ function ChatWindow({ messages, loading, chatMode }) {
         {chatMode === "sec" ? (
           <>
             <p>Ask about SEC filings for public companies.</p>
-            <p className="chat-empty-hint">Try: "What was Tesla's revenue in their latest 10-K?"</p>
+            <p className="chat-empty-hint">Try: "Compare Tesla and Apple's latest 10-K revenue."</p>
           </>
         ) : (
           <>
@@ -237,8 +326,16 @@ function ChatPage({ onLogout }) {
   const [secMessages, setSecMessages] = useState([]);
   const [docMessages, setDocMessages] = useState([]);
   const [loading, setLoading] = useState(false);
+
+  // PDF RAG state
   const [documents, setDocuments] = useState([]);
   const [selectedDocIds, setSelectedDocIds] = useState([]);
+
+  // SEC Agent state
+  const [secActiveDoc, setSecActiveDoc] = useState(null);
+  const [secActiveSet, setSecActiveSet] = useState([]);
+  const [secRecentFilings, setSecRecentFilings] = useState([]);
+
   const [chatMode, setChatMode] = useState("sec"); // "sec" | "doc"
   const [error, setError] = useState("");
 
@@ -253,10 +350,23 @@ function ChatPage({ onLogout }) {
     }
   }
 
-  // Load the user's PDF list whenever they switch into PDF RAG mode
+  async function refreshSecSidebar() {
+    try {
+      const [active, filings] = await Promise.all([getSecActive(), listSecDocuments()]);
+      setSecActiveDoc(active.active_doc);
+      setSecActiveSet(active.active_set || []);
+      setSecRecentFilings(filings);
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  // Load the relevant sidebar data whenever the user switches modes
   useEffect(() => {
     if (chatMode === "doc") {
       refreshDocuments();
+    } else if (chatMode === "sec") {
+      refreshSecSidebar();
     }
   }, [chatMode]);
 
@@ -274,6 +384,17 @@ function ChatPage({ onLogout }) {
     setSelectedDocIds([]);
   }
 
+  async function handleDeleteDoc(id) {
+    setError("");
+    try {
+      await deleteDocument(id);
+      setSelectedDocIds((ids) => ids.filter((x) => x !== id));
+      await refreshDocuments();
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
   async function handleSend(question) {
     setError("");
     const userMessage = { role: "user", content: question };
@@ -288,6 +409,9 @@ function ChatPage({ onLogout }) {
       let data;
       if (chatMode === "sec") {
         data = await chatSEC(question);
+        // Live-update the sidebar from this response instead of refetching
+        setSecActiveDoc(data.active_doc || null);
+        setSecActiveSet(data.active_set || []);
       } else {
         // If the user hasn't checked anything, default to the most
         // recently uploaded PDF (documents[0], since the API returns
@@ -309,6 +433,9 @@ function ChatPage({ onLogout }) {
 
       if (chatMode === "sec") {
         setSecMessages((msgs) => [...msgs, assistantMessage]);
+        // A newly fetched filing won't be in secRecentFilings yet — refresh
+        // that list in the background so it shows up without a manual switch.
+        listSecDocuments().then(setSecRecentFilings).catch(() => { });
       } else {
         setDocMessages((msgs) => [...msgs, assistantMessage]);
       }
@@ -377,6 +504,15 @@ function ChatPage({ onLogout }) {
             onToggle={toggleDoc}
             onSelectAll={selectAllDocs}
             onClearAll={clearDocSelection}
+            onDelete={handleDeleteDoc}
+          />
+        )}
+
+        {chatMode === "sec" && (
+          <SecSidebar
+            activeDoc={secActiveDoc}
+            activeSet={secActiveSet}
+            recentFilings={secRecentFilings}
           />
         )}
 

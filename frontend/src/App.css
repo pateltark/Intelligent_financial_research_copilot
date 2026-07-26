@@ -364,12 +364,37 @@ textarea {
   background: rgba(255, 255, 255, 0.02);
 }
 
+.doc-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem;
+}
+
 .doc-item label {
   display: flex;
   align-items: center;
   gap: 0.55rem;
   cursor: pointer;
   font-size: 0.8rem;
+  flex: 1;
+  min-width: 0;
+}
+
+.doc-delete-btn {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-size: 0.8rem;
+  cursor: pointer;
+  flex-shrink: 0;
+  padding: 2px 4px;
+  border-radius: 4px;
+  transition: color 0.15s;
+}
+
+.doc-delete-btn:hover {
+  color: var(--error);
 }
 
 .doc-item input[type="checkbox"] {
@@ -599,4 +624,51 @@ textarea {
 .btn-send:disabled {
   opacity: 0.4;
   cursor: not-allowed;
+}
+
+/* ── SEC Sidebar additions ───────────────────────────────── */
+.sec-active-block {
+  padding: 0.75rem 0.9rem;
+}
+
+.sec-active-pill {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  background: var(--sec-bg);
+  color: var(--sec);
+  font-size: 0.8rem;
+  font-weight: 600;
+  padding: 0.4rem 0.7rem;
+  border-radius: 99px;
+  width: fit-content;
+}
+
+.sec-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--sec);
+  flex-shrink: 0;
+}
+
+.sec-compare-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.8rem;
+}
+
+.sec-recent-item .doc-filename {
+  color: var(--text-dim);
+  font-size: 0.78rem;
+}
+
+.sec-sidebar-note {
+  margin-top: auto;
+  padding: 0.75rem 0.9rem;
+  font-size: 0.68rem;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  border-top: 1px solid var(--border);
 }

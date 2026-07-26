@@ -61,6 +61,28 @@ export async function clearPDF() {
     return data;
 }
 
+
+export async function getSecActive() {
+    const res = await fetch(`${BASE}/sec/active`, {
+        method: "GET",
+        headers: authHeaders(),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || "Failed to load active SEC document.");
+    return data; // { active_doc, active_set }
+}
+
+export async function listSecDocuments() {
+    const res = await fetch(`${BASE}/sec/documents`, {
+        method: "GET",
+        headers: authHeaders(),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || "Failed to load SEC filings.");
+    return data; // list of {id, ticker, form_type, filed_at, filename}
+}
+
+
 export async function chatSEC(question) {
     const res = await fetch(`${BASE}/chat/sec`, {
         method: "POST",
@@ -69,7 +91,7 @@ export async function chatSEC(question) {
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.detail || "SEC query failed.");
-    return data;
+    return data; // { answer, active_doc, active_set }
 }
 
 
@@ -91,5 +113,15 @@ export async function chatDoc(question, documentIds) {
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.detail || "Document query failed.");
+    return data;
+}
+
+export async function deleteDocument(documentId) {
+    const res = await fetch(`${BASE}/documents/${documentId}`, {
+        method: "DELETE",
+        headers: authHeaders(),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || "Delete failed.");
     return data;
 }

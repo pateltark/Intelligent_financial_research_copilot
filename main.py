@@ -10,7 +10,9 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from agent.llm_agent import ask_upload,ask_sec
 from rag.emb_chunks import create_vectorstore
 from auth import hash_password, verify_password, create_access_token, decode_token
-from rag.db import save_user_info, get_user_by_email, save_chat, save_emb, save_doc_info, get_user_documents
+from rag.db import save_user_info, get_user_by_email, save_chat, save_emb, save_doc_info, get_user_documents, list_sec_documents, delete_document
+from agent.session import get_active_doc, get_active_doc, get_active_set
+
 
 app = FastAPI(title="SEC Edgar Research API")
 
@@ -145,13 +147,32 @@ async def chat_with_doc(req: QueryRequest, user=Depends(get_current_user)):
 @app.post("/chat/sec")
 async def chat_with_sec(req: QueryRequest, user=Depends(get_current_user)):
     user_id = user["sub"]
-    
-    # Save user message to history under 'sec' mode
     save_chat(user_id=user_id, role="user", content=req.question, mode="sec")
     answer = ask_sec(question=req.question, user_id=user_id)
-    # Save bot answer to history under 'sec' mode
     save_chat(user_id=user_id, role="assistant", content=answer, mode="sec")
-    
-    return {"answer": answer}
+    return {
+        "answer": answer,
+        "active_doc": get_active_doc(user_id),
+        "active_set": get_active_set(user_id),
+    } 
 
 
+
+@app.get("/sec/active")
+def sec_active(user=Depends(get_current_user)):
+    user_id = user["sub"]
+    return {
+        "active_doc": get_active_doc(user_id),
+        "active_set": get_active_set(user_id),
+    }
+
+
+@app.get("/sec/documents")
+def sec_documents(user=Depends(get_current_user)):
+    return list_sec_documents()
+
+
+@app.delete("/documents/{document_id}")
+def delete_document_route(document_id: str, user=Depends(get_current_user)):
+    delete_document(user_id=user["sub"], document_id=document_id)
+    return {"message": "Document deleted."}
