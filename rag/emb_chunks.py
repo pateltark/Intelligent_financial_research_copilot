@@ -17,24 +17,36 @@ groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
 
 
-def ingest_text(text: str, user_id: str, source: str = None):
+def ingest_text(
+    text: str,
+    user_id: str,
+    source: str = None,
+    document_id: str = None
+):
 
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=400,
         chunk_overlap=60
     )
 
-    docs = [Document(page_content=text, metadata={"source": source} if source else {})]
+    docs = [
+        Document(
+            page_content=text,
+            metadata={"source": source} if source else {}
+        )
+    ]
 
     chunks = splitter.split_documents(docs)
 
     for chunk in chunks:
         emb = model.encode(chunk.page_content).tolist()
+
         save_emb(
-            chunk.page_content,
-            user_id,
-            emb,
-            source=chunk.metadata.get("source")
+            content=chunk.page_content,
+            user_id=user_id,
+            embedding=emb,
+            source=chunk.metadata.get("source"),
+            document_id=document_id      # <-- NEW
         )
 
     return True
@@ -70,11 +82,21 @@ def ingest_sec_text(
             )
 
 
-def create_vectorstore(pdf_path, user_id, source=None):
+def create_vectorstore(
+    pdf_path,
+    user_id,
+    source=None,
+    document_id=None
+):
 
     loader = PyPDFLoader(pdf_path)
     pages = loader.load()
 
     text = "\n".join(page.page_content for page in pages)
 
-    return ingest_text(text, user_id, source=source or pdf_path)
+    return ingest_text(
+        text=text,
+        user_id=user_id,
+        source=source or pdf_path,
+        document_id=document_id
+    )

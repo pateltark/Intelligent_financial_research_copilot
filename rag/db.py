@@ -97,8 +97,9 @@ cursor.execute(sec_documents_table)
 cursor.execute(sec_vector)
 cursor.execute(create_vector_table)
 
-# Run ALTER in case the table already existed without document_id
+# Run ALTER in case the table already existed without document_id or mode
 cursor.execute("ALTER TABLE chat_emb ADD COLUMN IF NOT EXISTS document_id TEXT;")
+cursor.execute("ALTER TABLE chat_history ADD COLUMN IF NOT EXISTS mode VARCHAR(20) DEFAULT 'sec';")
 
 
 def save_sec_vector(
@@ -121,18 +122,25 @@ def save_sec_vector(
     )
 
 
-def related_sec_chunks(ticker: str, form_type: str, question: str, k: int = 5):
+def related_sec_chunks(document_id: int, question: str, k: int = 5):
     query_embedding = model.encode(question).tolist()
+
     cursor.execute(
         """
-        SELECT content, embedding <=> %s::vector AS distance
+        SELECT content,
+               embedding <=> %s::vector AS distance
         FROM sec_vectors
-        WHERE ticker = %s AND form_type = %s
+        WHERE document_id = %s
         ORDER BY distance
         LIMIT %s
         """,
-        (json.dumps(query_embedding), ticker, form_type, k)
+        (
+            json.dumps(query_embedding),
+            document_id,
+            k
+        )
     )
+
     return cursor.fetchall()
 
 
@@ -169,41 +177,44 @@ def save_emb(content, user_id, embedding, source=None, document_id=None):
     )
 
 
-def save_chat(user_id, role, content):
+def save_chat(user_id, role, content, mode='sec'):
     cursor.execute(
         """
-        INSERT INTO chat_history (user_id, role, content)
-        VALUES (%s, %s, %s)
+        INSERT INTO chat_history (user_id, role, content, mode)
+        VALUES (%s, %s, %s, %s)
         """,
-        (user_id, role, content)
+        (user_id, role, content, mode)
     )
 
 
-def has_pdf(user_id):
-    cursor.execute(
-        "SELECT 1 FROM chat_emb WHERE user_id = %s LIMIT 1",
-        (user_id,)
-    )
-    return cursor.fetchone() is not None
-
-
-def load_chat(user_id):
-    cursor.execute(
-        """
-        SELECT role, content
-        FROM chat_history
-        WHERE user_id = %s
-        ORDER BY id
-        """,
-        (user_id,)
-    )
+def load_chat(user_id, mode=None):
+    if mode:
+        cursor.execute(
+            """
+            SELECT role, content
+            FROM chat_history
+            WHERE user_id = %s AND mode = %s
+            ORDER BY id
+            """,
+            (user_id, mode)
+        )
+    else:
+        cursor.execute(
+            """
+            SELECT role, content
+            FROM chat_history
+            WHERE user_id = %s
+            ORDER BY id
+            """,
+            (user_id,)
+        )
     rows = cursor.fetchall()
     return [{"role": "user" if role == "user" else "assistant", "content": content} for role, content in rows]
 
 
-def related_chunks(user_id, question, k=3, document_id=None):
+def related_chunks(user_id, question, k=3, document_ids=None):
     query_embedding = model.encode(question).tolist()
-    if document_id:
+    if document_ids:
         cursor.execute(
             """
             SELECT content, embedding <=> %s::vector AS distance
@@ -212,7 +223,7 @@ def related_chunks(user_id, question, k=3, document_id=None):
             ORDER BY distance
             LIMIT %s
             """,
-            (json.dumps(query_embedding), user_id, document_id, k)
+            (json.dumps(query_embedding), user_id, document_ids, k)
         )
     else:
         cursor.execute(

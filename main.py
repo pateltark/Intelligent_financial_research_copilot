@@ -5,14 +5,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel
 from jose import JWTError
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 from agent.llm_agent import ask_upload,ask_sec
 from rag.emb_chunks import create_vectorstore
 from auth import hash_password, verify_password, create_access_token, decode_token
-from rag.db import save_user_info, get_user_by_email, save_chat, save_emb, has_pdf, save_doc_info
+from rag.db import save_user_info, get_user_by_email, save_chat, save_emb, save_doc_info
 
 app = FastAPI(title="SEC Edgar Research API")
 
+security = HTTPBearer()
 
 app.add_middleware(
     CORSMiddleware,
@@ -22,12 +24,12 @@ app.add_middleware(
 )
 
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
+# oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 
 
 class QueryRequest(BaseModel):
     question: str
-    document_id: str | None = None
+    document_ids: list[str] | None = None
 
 class RegisterRequest(BaseModel):
     user_id: str
@@ -40,10 +42,20 @@ class LoginRequest(BaseModel):
     password: str
 
 
-def get_current_user(token: str = Depends(oauth2_scheme)):
+# def get_current_user(token: str = Depends(oauth2_scheme)):
+#     try:
+#         payload = decode_token(token)
+#         return payload  
+#     except JWTError:
+#         raise HTTPException(status_code=401, detail="Invalid or expired token.")
+
+def get_current_user(
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+):
     try:
+        token = credentials.credentials
         payload = decode_token(token)
-        return payload  
+        return payload
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid or expired token.")
 
@@ -105,18 +117,18 @@ def clear_pdf(user=Depends(get_current_user)):
 async def chat_with_doc(req: QueryRequest, user=Depends(get_current_user)):
     user_id = user["sub"]
     
-    # Save user message to history
-    save_chat(user_id=user_id, role="user", content=req.question)
+    # Save user message to history under 'doc' mode
+    save_chat(user_id=user_id, role="user", content=req.question, mode="doc")
     
     # Generate Answer
     answer = ask_upload(
         question=req.question, 
         user_id=user_id, 
-        document_id=req.document_id
+        ocument_ids=req.document_ids
     )
     
-    # Save bot answer to history
-    save_chat(user_id=user_id, role="assistant", content=answer)
+    # Save bot answer to history under 'doc' mode
+    save_chat(user_id=user_id, role="assistant", content=answer, mode="doc")
     
     return {"answer": answer}
 
@@ -126,8 +138,10 @@ async def chat_with_doc(req: QueryRequest, user=Depends(get_current_user)):
 async def chat_with_sec(req: QueryRequest, user=Depends(get_current_user)):
     user_id = user["sub"]
     
-    save_chat(user_id=user_id, role="user", content=req.question)
+    # Save user message to history under 'sec' mode
+    save_chat(user_id=user_id, role="user", content=req.question, mode="sec")
     answer = ask_sec(question=req.question, user_id=user_id)
-    save_chat(user_id=user_id, role="assistant", content=answer)
+    # Save bot answer to history under 'sec' mode
+    save_chat(user_id=user_id, role="assistant", content=answer, mode="sec")
     
     return {"answer": answer}

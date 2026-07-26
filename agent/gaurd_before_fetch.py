@@ -28,12 +28,11 @@ client = Groq(
 # Models
 # ======================================================
 
+from typing import Literal
+
 class DocumentRequest(BaseModel):
-
     company: str
-
     ticker: str | None = None
-
     form_type: Literal[
         "10-K",
         "10-Q",
@@ -41,13 +40,17 @@ class DocumentRequest(BaseModel):
         "DEF 14A",
         "S-1"
     ] | None = None
-
     period: str | None = None
 
 
 class PlannerOutput(BaseModel):
 
-    documents: list[DocumentRequest]
+    action: Literal[
+        "FETCH",
+        "CURRENT_DOC"
+    ]
+
+    documents: list[DocumentRequest] = []
 
 
 # ======================================================
@@ -55,64 +58,47 @@ class PlannerOutput(BaseModel):
 # ======================================================
 
 SYSTEM_PROMPT = """
-You are an SEC document extraction agent.
+You are an SEC routing agent.
 
-Never answer the question.
+Your ONLY job is to decide whether the user wants:
 
-Always call extract_document.
+1. FETCH
+   - The user is requesting a new SEC filing.
+   - Examples:
+        Show Tesla latest 10-K
+        Download Apple's latest 8-K
+        Microsoft quarterly report
+        Compare Tesla and Apple revenue
 
-Extract every SEC filing the user needs.
+2. CURRENT_DOC
+   - The user is asking about the SEC filing that is already open.
+   - Examples:
+        What are the risks?
+        Summarize this filing.
+        What is on page 5?
+        What did they say about revenue?
+        Explain this document.
 
-Return one document for each company.
+Rules
 
-Examples
+If action is FETCH:
+- Extract every requested document.
+- Populate documents.
 
-Tesla revenue
+If action is CURRENT_DOC:
+- documents must be [].
 
-↓
+Never invent ticker names.
 
-Tesla
-10-K
+Never use "Unknown".
 
-------------------------------------
-
-Apple latest SEC news
-
-↓
-
-Apple
-8-K
-
-------------------------------------
-
-Microsoft quarterly report
-
-↓
-
-Microsoft
-10-Q
-
-------------------------------------
-
-Compare Tesla and Apple revenue
-
-↓
-
-Tesla 10-K
-
-Apple 10-K
-
-------------------------------------
-
-If no SEC filing is required
-
+If you cannot identify a company and the question is clearly referring to the current document,
 return
 
-documents=[]
-
-Never use empty strings.
-
-Unknown values should be omitted.
+{
+  "action":"CURRENT_DOC",
+  "documents":[]
+}
 """
 
 
@@ -162,26 +148,6 @@ def planner(question: str) -> PlannerOutput:
 
 
 
-#planner LLM
-
-
-# Checks if que relted doc available or not in db.
-
-# def check_avail_sec_doc(extract_sec_text):
-#     extrat_sec_text = planner(que)
-#     first_doc = extrat_sec_text.documents[0]
-
-#     ticker = first_doc.ticker
-#     form_type = first_doc.form_type
-#     print (ticker,form_type)
-#     downloaded_row = get_sec_document(ticker, form_type)
-    
-#     if downloaded_row is None:
-#         print("none")
-#         return None
-#     else:
-#         print (downloaded_row)
-#         return downloaded_row
 
 
 def check_avail_sec_doc(planner_output):
