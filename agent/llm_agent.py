@@ -21,7 +21,7 @@ from sec.edgar import (
 )
 
 from agent.gaurd_before_fetch import check_avail_sec_doc, planner
-from rag.db import save_sec_document,get_sec_document,related_sec_chunks, save_sec_vector, related_chunks,save_doc_info
+from rag.db import save_sec_document,get_sec_document,related_sec_chunks, save_sec_vector, related_chunks,save_doc_info,related_chunks_per_doc  
 from rag.emb_chunks import ingest_text,ingest_sec_text, create_vectorstore
 from rag.retrieve import get_retrieve
 
@@ -33,23 +33,30 @@ client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
 
 def generate_answer(question: str, context_chunks, user_id: str, mode: str = "sec") -> str:
-    # 1. Guard against empty context
+    
     if not context_chunks or context_chunks == "No relevant SEC context found.":
         return "I couldn't find relevant information in the database to answer your question."
 
-    # 2. Extract text from PostgreSQL output tuple: (content, distance)
-    flat_chunks = []
-    
-    # Handles nested lists from ask_sec OR flat list from ask_upload
-    if isinstance(context_chunks, list) and len(context_chunks) > 0 and isinstance(context_chunks[0], list):
-        for doc_group in context_chunks:
-            for chunk in doc_group:
-                flat_chunks.append(chunk[0])  # chunk[0] is the text content
-    else:
-        for chunk in context_chunks:
-            flat_chunks.append(chunk[0])
+    is_multi_doc = (
+        isinstance(context_chunks, list)
+        and len(context_chunks) > 0
+        and isinstance(context_chunks[0], list)
+    )
 
-    formatted_context = "\n\n---\n\n".join(flat_chunks)
+    if is_multi_doc:
+        sections = []
+        for doc_group in context_chunks:
+            if not doc_group:
+                continue
+            # row shape: (content, document_id, filename, distance)
+            label = doc_group[0][2] if len(doc_group[0]) > 2 else doc_group[0][1]
+            body = "\n".join(row[0] for row in doc_group)
+            sections.append(f"=== DOCUMENT: {label} ===\n{body}")
+        formatted_context = "\n\n".join(sections)
+    else:
+        flat_chunks = [chunk[0] for chunk in context_chunks]
+        formatted_context = "\n\n---\n\n".join(flat_chunks)
+
 
     # 3. Load recent chat history specifically for this mode (last 6 messages / 3 turns)
     history = load_chat(user_id, mode=mode)[-6:]
@@ -61,16 +68,18 @@ def generate_answer(question: str, context_chunks, user_id: str, mode: str = "se
     # 4. Construct the RAG prompt with History
     prompt = f"""You are an expert financial research assistant. Answer the question using ONLY the provided context and conversation history below.
 
-{formatted_history}DOCUMENT CONTEXT:
-{formatted_context}
+    {formatted_history}DOCUMENT CONTEXT:
 
-USER QUESTION:
-{question}
+    {formatted_context}
+
+    USER QUESTION:
+    {question}
 
     INSTRUCTIONS:
     - Give a concise, clear answer based strictly on the provided context and previous history.
+    - If the context contains multiple documents (marked with "=== DOCUMENT: ... ==="), treat each as a separate source and refer to them by name when comparing.
     - If the answer is not present in the context, explicitly state "The provided document context does not contain enough information to answer this question."
-"""
+    """
 
     # 5. Query Groq API
     response = client.chat.completions.create(
@@ -216,24 +225,13 @@ def ask_sec(question: str, user_id: str):
     )
 
 
-# test = ask_sec("Summarize Microsoft's last 10-Q filing.","D:\intelligent_financial_research_copilot\edgar_docs\TSLA_8-K_2026-07-02.htm",user_id="u101" )
 
-# print(test)
+def ask_upload(question, user_id, document_ids=None):
+    if document_ids and len(document_ids) > 1:
+        chunks = related_chunks_per_doc(user_id=user_id, question=question, document_ids=document_ids)
+        print(f"[per_doc] docs={document_ids} -> groups={len(chunks)}, sizes={[len(g) for g in chunks]}")
+    else:
+        chunks = related_chunks(user_id=user_id, question=question, document_ids=document_ids)
+        print(f"[single] docs={document_ids} -> rows={len(chunks)}")
 
-def ask_upload(
-    question: str,
-    user_id: str,
-    document_ids: list[str] | None = None
-):
-
-    chunks = related_chunks(
-        user_id=user_id,
-        question=question,
-        document_ids=document_ids
-    )
-
-    return generate_answer(
-        question,
-        chunks,
-        user_id=user_id
-    )
+    return generate_answer(question, chunks, user_id=user_id)

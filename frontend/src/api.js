@@ -72,11 +72,22 @@ export async function chatSEC(question) {
     return data;
 }
 
-export async function chatDoc(question) {
+
+export async function listDocuments() {
+    const res = await fetch(`${BASE}/documents`, {
+        method: "GET",
+        headers: authHeaders(),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || "Failed to load documents.");
+    return data;
+}
+
+export async function chatDoc(question, documentIds) {
     const res = await fetch(`${BASE}/chat/doc`, {
         method: "POST",
         headers: authHeaders(),
-        body: JSON.stringify({ question }),
+        body: JSON.stringify({ question, document_ids: documentIds }),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.detail || "Document query failed.");
