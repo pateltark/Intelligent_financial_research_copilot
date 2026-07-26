@@ -12,7 +12,7 @@ from rag.db import load_chat, save_chat,get_sec_document
 from agent.tools import TOOLS
 # from agent.tools import fetch_sec_document, retrieve_documents, extract_document
 from agent.executor import run_tool
-from agent.session import set_active_doc,get_active_doc
+from agent.session import set_active_doc,get_active_doc, set_active_set
 
 from sec.edgar import (
     fetch_sec_filings,
@@ -32,8 +32,7 @@ client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
 
 
-def generate_answer(question: str, context_chunks, user_id: str, mode: str = "sec") -> str:
-    
+def generate_answer(question: str, context_chunks, user_id: str, mode: str = "sec", labels: list[str] | None = None) -> str:
     if not context_chunks or context_chunks == "No relevant SEC context found.":
         return "I couldn't find relevant information in the database to answer your question."
 
@@ -45,11 +44,10 @@ def generate_answer(question: str, context_chunks, user_id: str, mode: str = "se
 
     if is_multi_doc:
         sections = []
-        for doc_group in context_chunks:
+        for i, doc_group in enumerate(context_chunks):
             if not doc_group:
                 continue
-            # row shape: (content, document_id, filename, distance)
-            label = doc_group[0][2] if len(doc_group[0]) > 2 else doc_group[0][1]
+            label = labels[i] if labels and i < len(labels) else f"Document {i+1}"
             body = "\n".join(row[0] for row in doc_group)
             sections.append(f"=== DOCUMENT: {label} ===\n{body}")
         formatted_context = "\n\n".join(sections)
@@ -133,6 +131,8 @@ def ask_sec(question: str, user_id: str):
     docs = check_avail_sec_doc(plan)
 
     sec_chunks = []
+    sec_labels = []
+    touched_docs = []
 
     for doc in docs:
 
@@ -203,6 +203,8 @@ def ask_sec(question: str, user_id: str):
                 form_type=request.form_type,
             )
 
+        touched_docs.append({"document_id": document_id, "ticker": request.ticker, "form_type": request.form_type})
+
         # ------------------------------------
         # Retrieve using document_id
         # ------------------------------------
@@ -214,24 +216,22 @@ def ask_sec(question: str, user_id: str):
 
         if doc_chunks:
             sec_chunks.append(doc_chunks)
+            sec_labels.append(f"{request.ticker} {request.form_type}")
 
     if not sec_chunks:
         return "No relevant SEC context found."
 
-    return generate_answer(
-        question,
-        sec_chunks,
-        user_id
-    )
+    set_active_set(user_id, touched_docs)
+
+    return generate_answer(question, sec_chunks, user_id, mode="sec", labels=sec_labels)
 
 
 
-def ask_upload(question, user_id, document_ids=None):
+def ask_upload(question: str, user_id: str, document_ids: list[str] | None = None):
     if document_ids and len(document_ids) > 1:
         chunks = related_chunks_per_doc(user_id=user_id, question=question, document_ids=document_ids)
-        print(f"[per_doc] docs={document_ids} -> groups={len(chunks)}, sizes={[len(g) for g in chunks]}")
+        labels = [group[0][2] if group else "Unknown" for group in chunks]  # row = (content, document_id, filename, distance)
+        return generate_answer(question, chunks, user_id=user_id, mode="doc", labels=labels)
     else:
         chunks = related_chunks(user_id=user_id, question=question, document_ids=document_ids)
-        print(f"[single] docs={document_ids} -> rows={len(chunks)}")
-
-    return generate_answer(question, chunks, user_id=user_id)
+        return generate_answer(question, chunks, user_id=user_id, mode="doc")
