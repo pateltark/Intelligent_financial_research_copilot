@@ -381,6 +381,11 @@ textarea {
   min-width: 0;
 }
 
+.doc-label-disabled {
+  opacity: 0.4;
+  cursor: not-allowed !important;
+}
+
 .doc-delete-btn {
   background: none;
   border: none;

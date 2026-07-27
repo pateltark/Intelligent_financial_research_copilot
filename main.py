@@ -47,6 +47,10 @@ class DocumentOut(BaseModel):
     id: str
     filename: str
 
+
+MAX_COMPARE_DOCS = 5
+
+
 # def get_current_user(token: str = Depends(oauth2_scheme)):
 #     try:
 #         payload = decode_token(token)
@@ -125,6 +129,12 @@ def clear_pdf(user=Depends(get_current_user)):
 
 @app.post("/chat/doc")
 async def chat_with_doc(req: QueryRequest, user=Depends(get_current_user)):
+    if req.document_ids and len(req.document_ids) > MAX_COMPARE_DOCS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"You can compare up to {MAX_COMPARE_DOCS} documents at once."
+        )
+
     user_id = user["sub"]
     
     # Save user message to history under 'doc' mode
