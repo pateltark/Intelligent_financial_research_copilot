@@ -29,6 +29,34 @@ load_dotenv()
 
 client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
+# Cosine distance from pgvector's `<=>` operator ranges 0 (identical) to
+# 2 (opposite). Anything above this is treated as "not actually related
+# to the question" and short-circuits before an LLM call is even made —
+# cheaper than a Groq call, and doesn't rely on the model policing itself.
+# Tune this empirically: log a few real (question, best_distance) pairs
+# for on-topic vs. off-topic questions and set the cutoff between them.
+RELEVANCE_THRESHOLD = 0.6
+
+
+def _best_distance(chunks):
+    """chunks: either a flat list of rows (each row's last element is the
+    distance), or a list of per-document groups (list of lists). Returns
+    the smallest distance found — i.e. the single closest match — or
+    infinity if there's nothing to compare."""
+    if not chunks:
+        return float("inf")
+
+    if isinstance(chunks[0], list):
+        distances = [row[-1] for group in chunks for row in group]
+    else:
+        distances = [row[-1] for row in chunks]
+
+    return min(distances) if distances else float("inf")
+
+
+def _is_relevant(chunks, threshold: float = RELEVANCE_THRESHOLD) -> bool:
+    return _best_distance(chunks) <= threshold
+
 
 
 
@@ -74,9 +102,10 @@ def generate_answer(question: str, context_chunks, user_id: str, mode: str = "se
     {question}
 
     INSTRUCTIONS:
-    - Give a concise, clear answer based strictly on the provided context and previous history.
+    - Answer using ONLY the information in DOCUMENT CONTEXT above. Do not use any outside or general knowledge, even if you happen to know the answer.
+    - If the context does not address the question, respond with EXACTLY this sentence and nothing else: "The provided document context does not contain enough information to answer this question." Do not follow it with an answer from general knowledge.
+    - Otherwise, give a concise, clear answer based strictly on the provided context and previous history.
     - If the context contains multiple documents (marked with "=== DOCUMENT: ... ==="), treat each as a separate source and refer to them by name when comparing.
-    - If the answer is not present in the context, explicitly state "The provided document context does not contain enough information to answer this question."
     """
 
     # 5. Query Groq API
@@ -118,10 +147,10 @@ def ask_sec(question: str, user_id: str):
             question=question
         )
 
-        if not chunks:
+        if not chunks or not _is_relevant(chunks):
             return "No relevant SEC context found."
 
-        return generate_answer(question, chunks, user_id)
+        return generate_answer(question, chunks, user_id, mode="sec")
 
 
     # ========================================
@@ -218,7 +247,7 @@ def ask_sec(question: str, user_id: str):
             sec_chunks.append(doc_chunks)
             sec_labels.append(f"{request.ticker} {request.form_type}")
 
-    if not sec_chunks:
+    if not sec_chunks or not _is_relevant(sec_chunks):
         return "No relevant SEC context found."
 
     set_active_set(user_id, touched_docs)
@@ -228,10 +257,20 @@ def ask_sec(question: str, user_id: str):
 
 
 def ask_upload(question: str, user_id: str, document_ids: list[str] | None = None):
-    if document_ids and len(document_ids) > 1:
+    NOT_ENOUGH_INFO = "The provided document context does not contain enough information to answer this question."
+
+    if not document_ids:
+        return "Please select at least one document to chat with."
+
+    if len(document_ids) > 1:
         chunks = related_chunks_per_doc(user_id=user_id, question=question, document_ids=document_ids)
+        chunks = [group for group in chunks if group]  # drop empty per-doc groups
+        if not chunks or not _is_relevant(chunks):
+            return NOT_ENOUGH_INFO
         labels = [group[0][2] if group else "Unknown" for group in chunks]  # row = (content, document_id, filename, distance)
         return generate_answer(question, chunks, user_id=user_id, mode="doc", labels=labels)
     else:
         chunks = related_chunks(user_id=user_id, question=question, document_ids=document_ids)
+        if not chunks or not _is_relevant(chunks):
+            return NOT_ENOUGH_INFO
         return generate_answer(question, chunks, user_id=user_id, mode="doc")

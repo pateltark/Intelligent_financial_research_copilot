@@ -43,7 +43,7 @@ function PDFUpload({ onUploaded, setError }) {
 }
 
 // ── PDF Document Sidebar Component ─────────────────────────
-function DocSidebar({ documents, selectedIds, onToggle, onSelectAll, onClearAll, onDelete }) {
+function DocSidebar({ documents, selectedIds, onToggle, onSelectAll, onClearAll, onDelete, maxSelect }) {
   if (documents.length === 0) {
     return (
       <aside className="doc-sidebar">
@@ -51,6 +51,8 @@ function DocSidebar({ documents, selectedIds, onToggle, onSelectAll, onClearAll,
       </aside>
     );
   }
+
+  const atLimit = selectedIds.length >= maxSelect;
 
   function handleDeleteClick(e, doc) {
     e.preventDefault(); // don't toggle the checkbox underneath
@@ -63,32 +65,42 @@ function DocSidebar({ documents, selectedIds, onToggle, onSelectAll, onClearAll,
   return (
     <aside className="doc-sidebar">
       <div className="doc-sidebar-header">
-        <span>Your PDFs</span>
+        <span>
+          Your PDFs {selectedIds.length > 0 && `(${selectedIds.length}/${maxSelect})`}
+        </span>
         <div className="doc-sidebar-actions">
           <button onClick={onSelectAll}>All</button>
           <button onClick={onClearAll}>None</button>
         </div>
       </div>
       <ul className="doc-list">
-        {documents.map((doc) => (
-          <li key={doc.id} className="doc-item">
-            <label>
-              <input
-                type="checkbox"
-                checked={selectedIds.includes(doc.id)}
-                onChange={() => onToggle(doc.id)}
-              />
-              <span className="doc-filename" title={doc.filename}>{doc.filename}</span>
-            </label>
-            <button
-              className="doc-delete-btn"
-              title="Delete document"
-              onClick={(e) => handleDeleteClick(e, doc)}
-            >
-              🗑
-            </button>
-          </li>
-        ))}
+        {documents.map((doc) => {
+          const isSelected = selectedIds.includes(doc.id);
+          const disableCheckbox = atLimit && !isSelected;
+          return (
+            <li key={doc.id} className="doc-item">
+              <label
+                className={disableCheckbox ? "doc-label-disabled" : ""}
+                title={disableCheckbox ? `Limit is ${maxSelect} documents — deselect one first` : doc.filename}
+              >
+                <input
+                  type="checkbox"
+                  checked={isSelected}
+                  disabled={disableCheckbox}
+                  onChange={() => onToggle(doc.id)}
+                />
+                <span className="doc-filename">{doc.filename}</span>
+              </label>
+              <button
+                className="doc-delete-btn"
+                title="Delete document"
+                onClick={(e) => handleDeleteClick(e, doc)}
+              >
+                🗑
+              </button>
+            </li>
+          );
+        })}
       </ul>
     </aside>
   );
@@ -370,14 +382,26 @@ function ChatPage({ onLogout }) {
     }
   }, [chatMode]);
 
+  const MAX_COMPARE_DOCS = 5;
+
   function toggleDoc(id) {
-    setSelectedDocIds((ids) =>
-      ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id]
-    );
+    setSelectedDocIds((ids) => {
+      if (ids.includes(id)) {
+        return ids.filter((x) => x !== id);
+      }
+      if (ids.length >= MAX_COMPARE_DOCS) {
+        setError(`You can compare up to ${MAX_COMPARE_DOCS} documents at once.`);
+        return ids;
+      }
+      return [...ids, id];
+    });
   }
 
   function selectAllDocs() {
-    setSelectedDocIds(documents.map((d) => d.id));
+    setSelectedDocIds(documents.slice(0, MAX_COMPARE_DOCS).map((d) => d.id));
+    if (documents.length > MAX_COMPARE_DOCS) {
+      setError(`Only the first ${MAX_COMPARE_DOCS} documents were selected — that's the compare limit.`);
+    }
   }
 
   function clearDocSelection() {
@@ -505,6 +529,7 @@ function ChatPage({ onLogout }) {
             onSelectAll={selectAllDocs}
             onClearAll={clearDocSelection}
             onDelete={handleDeleteDoc}
+            maxSelect={MAX_COMPARE_DOCS}
           />
         )}
 
