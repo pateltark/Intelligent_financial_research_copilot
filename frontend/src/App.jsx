@@ -75,13 +75,21 @@ function DocSidebar({ documents, selectedIds, onToggle, onSelectAll, onClearAll,
       </div>
       <ul className="doc-list">
         {documents.map((doc) => {
+          const isReady = doc.status === "ready";
           const isSelected = selectedIds.includes(doc.id);
-          const disableCheckbox = atLimit && !isSelected;
+          const disableCheckbox = !isReady || (atLimit && !isSelected);
+
           return (
             <li key={doc.id} className="doc-item">
               <label
                 className={disableCheckbox ? "doc-label-disabled" : ""}
-                title={disableCheckbox ? `Limit is ${maxSelect} documents — deselect one first` : doc.filename}
+                title={
+                  !isReady
+                    ? doc.status === "failed" ? "Processing failed" : "Still processing..."
+                    : (atLimit && !isSelected)
+                      ? `Limit is ${maxSelect} documents — deselect one first`
+                      : doc.filename
+                }
               >
                 <input
                   type="checkbox"
@@ -90,6 +98,8 @@ function DocSidebar({ documents, selectedIds, onToggle, onSelectAll, onClearAll,
                   onChange={() => onToggle(doc.id)}
                 />
                 <span className="doc-filename">{doc.filename}</span>
+                {doc.status === "processing" && <span className="doc-status-pill processing">Processing…</span>}
+                {doc.status === "failed" && <span className="doc-status-pill failed">Failed</span>}
               </label>
               <button
                 className="doc-delete-btn"
@@ -381,6 +391,17 @@ function ChatPage({ onLogout }) {
       refreshSecSidebar();
     }
   }, [chatMode]);
+
+  // While any PDF is still processing, poll every 3s so the sidebar
+  // updates to "ready" without the user having to switch tabs or refresh.
+  useEffect(() => {
+    if (chatMode !== "doc") return;
+    const hasPending = documents.some((d) => d.status === "processing");
+    if (!hasPending) return;
+
+    const interval = setInterval(refreshDocuments, 3000);
+    return () => clearInterval(interval);
+  }, [chatMode, documents]);
 
   const MAX_COMPARE_DOCS = 5;
 

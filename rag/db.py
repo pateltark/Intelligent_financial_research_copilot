@@ -67,6 +67,7 @@ def _run_migrations():
                 id TEXT PRIMARY KEY,
                 user_id TEXT NOT NULL,
                 filename TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'ready',
                 uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         """)
@@ -124,6 +125,7 @@ def _run_migrations():
         # Migrations for columns added after initial table creation
         cursor.execute("ALTER TABLE chat_emb ADD COLUMN IF NOT EXISTS document_id TEXT;")
         cursor.execute("ALTER TABLE chat_history ADD COLUMN IF NOT EXISTS mode VARCHAR(20) DEFAULT 'sec';")
+        cursor.execute("ALTER TABLE documents ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'ready';")
 
 
 _run_migrations()
@@ -246,24 +248,41 @@ def get_user_by_email(email):
 
 
 # ── Uploaded PDF documents ──────────────────────────────────
-def save_doc_info(user_id, pdf_name):
+def save_doc_info(user_id, pdf_name, status="processing"):
     doc_id = str(uuid.uuid4())
     with get_db() as cursor:
         cursor.execute(
             """
-            INSERT INTO documents (id, user_id, filename)
-            VALUES (%s, %s, %s)
+            INSERT INTO documents (id, user_id, filename, status)
+            VALUES (%s, %s, %s, %s)
             """,
-            (doc_id, user_id, pdf_name),
+            (doc_id, user_id, pdf_name, status),
         )
     return doc_id
+
+
+def update_document_status(document_id, status):
+    with get_db() as cursor:
+        cursor.execute(
+            "UPDATE documents SET status = %s WHERE id = %s",
+            (status, document_id),
+        )
+
+
+def count_processing_documents(user_id):
+    with get_db() as cursor:
+        cursor.execute(
+            "SELECT COUNT(*) FROM documents WHERE user_id = %s AND status = 'processing'",
+            (user_id,),
+        )
+        return cursor.fetchone()[0]
 
 
 def get_user_documents(user_id):
     with get_db() as cursor:
         cursor.execute(
             """
-            SELECT id, filename
+            SELECT id, filename, status
             FROM documents
             WHERE user_id = %s
             ORDER BY uploaded_at DESC
@@ -271,7 +290,7 @@ def get_user_documents(user_id):
             (user_id,),
         )
         rows = cursor.fetchall()
-    return [{"id": row[0], "filename": row[1]} for row in rows]
+    return [{"id": row[0], "filename": row[1], "status": row[2]} for row in rows]
 
 
 def delete_document(user_id, document_id):
