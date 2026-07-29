@@ -43,15 +43,17 @@ function PDFUpload({ onUploaded, setError }) {
 }
 
 // ── PDF Document Sidebar Component ─────────────────────────
-function DocSidebar({ documents, selectedIds, onToggle, onSelectAll, onClearAll, onDelete, maxSelect }) {
-  if (documents.length === 0) {
-    return (
-      <aside className="doc-sidebar">
-        <div className="doc-sidebar-empty">No PDFs uploaded yet.</div>
-      </aside>
-    );
-  }
-
+function DocSidebar({
+  documents,
+  selectedIds,
+  onToggle,
+  onSelectAll,
+  onClearAll,
+  onDelete,
+  maxSelect,
+  onUploaded,
+  setError,
+}) {
   const atLimit = selectedIds.length >= maxSelect;
 
   function handleDeleteClick(e, doc) {
@@ -73,45 +75,46 @@ function DocSidebar({ documents, selectedIds, onToggle, onSelectAll, onClearAll,
           <button onClick={onClearAll}>None</button>
         </div>
       </div>
-      <ul className="doc-list">
-        {documents.map((doc) => {
-          const isReady = doc.status === "ready";
-          const isSelected = selectedIds.includes(doc.id);
-          const disableCheckbox = !isReady || (atLimit && !isSelected);
 
-          return (
-            <li key={doc.id} className="doc-item">
-              <label
-                className={disableCheckbox ? "doc-label-disabled" : ""}
-                title={
-                  !isReady
-                    ? doc.status === "failed" ? "Processing failed" : "Still processing..."
-                    : (atLimit && !isSelected)
-                      ? `Limit is ${maxSelect} documents — deselect one first`
-                      : doc.filename
-                }
-              >
-                <input
-                  type="checkbox"
-                  checked={isSelected}
-                  disabled={disableCheckbox}
-                  onChange={() => onToggle(doc.id)}
-                />
-                <span className="doc-filename">{doc.filename}</span>
-                {doc.status === "processing" && <span className="doc-status-pill processing">Processing…</span>}
-                {doc.status === "failed" && <span className="doc-status-pill failed">Failed</span>}
-              </label>
-              <button
-                className="doc-delete-btn"
-                title="Delete document"
-                onClick={(e) => handleDeleteClick(e, doc)}
-              >
-                🗑
-              </button>
-            </li>
-          );
-        })}
-      </ul>
+      <div className="doc-list-scroll">
+        {documents.length === 0 ? (
+          <div className="doc-sidebar-empty">No PDFs uploaded yet.</div>
+        ) : (
+          <ul className="doc-list">
+            {documents.map((doc) => {
+              const isSelected = selectedIds.includes(doc.id);
+              const disableCheckbox = atLimit && !isSelected;
+              return (
+                <li key={doc.id} className="doc-item">
+                  <label
+                    className={disableCheckbox ? "doc-label-disabled" : ""}
+                    title={disableCheckbox ? `Limit is ${maxSelect} documents — deselect one first` : doc.filename}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={isSelected}
+                      disabled={disableCheckbox}
+                      onChange={() => onToggle(doc.id)}
+                    />
+                    <span className="doc-filename">{doc.filename}</span>
+                  </label>
+                  <button
+                    className="doc-delete-btn"
+                    title="Delete document"
+                    onClick={(e) => handleDeleteClick(e, doc)}
+                  >
+                    🗑
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </div>
+
+      <div className="doc-sidebar-footer">
+        <PDFUpload onUploaded={onUploaded} setError={setError} />
+      </div>
     </aside>
   );
 }
@@ -174,6 +177,7 @@ function SecSidebar({ activeDoc, activeSet, recentFilings }) {
           ))}
         </ul>
       )}
+
       <p className="sec-sidebar-note">Shared across all users — not personal to your account.</p>
     </aside>
   );
@@ -270,6 +274,51 @@ function ChatInput({ onSend, disabled, placeholder }) {
       <button className="btn-send" onClick={submit} disabled={disabled || !value.trim()}>
         ↑
       </button>
+    </div>
+  );
+}
+
+// ── User Menu (avatar + dropdown with account info & logout) ──
+function UserMenu({ onLogout }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+
+  let user = { name: "User", email: "" };
+  try {
+    const stored = JSON.parse(localStorage.getItem("user") || "null");
+    if (stored) user = stored;
+  } catch {
+    // ignore malformed localStorage value
+  }
+
+  const initial = (user.name || user.email || "U").charAt(0).toUpperCase();
+
+  useEffect(() => {
+    function handleClickOutside(e) {
+      if (ref.current && !ref.current.contains(e.target)) setOpen(false);
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  return (
+    <div className="user-menu" ref={ref}>
+      <button
+        className="user-avatar-btn"
+        onClick={() => setOpen((o) => !o)}
+        title={user.name || user.email}
+      >
+        {initial}
+      </button>
+      {open && (
+        <div className="user-dropdown">
+          <div className="user-dropdown-name">{user.name}</div>
+          {user.email && <div className="user-dropdown-email">{user.email}</div>}
+          <button className="user-dropdown-logout" onClick={onLogout}>
+            Sign out
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -392,17 +441,6 @@ function ChatPage({ onLogout }) {
     }
   }, [chatMode]);
 
-  // While any PDF is still processing, poll every 3s so the sidebar
-  // updates to "ready" without the user having to switch tabs or refresh.
-  useEffect(() => {
-    if (chatMode !== "doc") return;
-    const hasPending = documents.some((d) => d.status === "processing");
-    if (!hasPending) return;
-
-    const interval = setInterval(refreshDocuments, 3000);
-    return () => clearInterval(interval);
-  }, [chatMode, documents]);
-
   const MAX_COMPARE_DOCS = 5;
 
   function toggleDoc(id) {
@@ -443,6 +481,7 @@ function ChatPage({ onLogout }) {
   async function handleSend(question) {
     setError("");
     const userMessage = { role: "user", content: question };
+
     if (chatMode === "sec") {
       setSecMessages((msgs) => [...msgs, userMessage]);
     } else {
@@ -452,6 +491,7 @@ function ChatPage({ onLogout }) {
     setLoading(true);
     try {
       let data;
+
       if (chatMode === "sec") {
         data = await chatSEC(question);
         // Live-update the sidebar from this response instead of refetching
@@ -465,8 +505,8 @@ function ChatPage({ onLogout }) {
           selectedDocIds.length > 0
             ? selectedDocIds
             : documents[0]
-              ? [documents[0].id]
-              : [];
+            ? [documents[0].id]
+            : [];
         data = await chatDoc(question, effectiveIds);
       }
 
@@ -527,10 +567,7 @@ function ChatPage({ onLogout }) {
         </div>
 
         <div className="header-right">
-          {chatMode === "doc" && (
-            <PDFUpload onUploaded={refreshDocuments} setError={setError} />
-          )}
-          <button className="btn-logout" onClick={onLogout}>Sign out</button>
+          <UserMenu onLogout={onLogout} />
         </div>
       </header>
 
@@ -551,9 +588,10 @@ function ChatPage({ onLogout }) {
             onClearAll={clearDocSelection}
             onDelete={handleDeleteDoc}
             maxSelect={MAX_COMPARE_DOCS}
+            onUploaded={refreshDocuments}
+            setError={setError}
           />
         )}
-
         {chatMode === "sec" && (
           <SecSidebar
             activeDoc={secActiveDoc}
