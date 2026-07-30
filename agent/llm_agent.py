@@ -35,7 +35,7 @@ client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 # cheaper than a Groq call, and doesn't rely on the model policing itself.
 # Tune this empirically: log a few real (question, best_distance) pairs
 # for on-topic vs. off-topic questions and set the cutoff between them.
-RELEVANCE_THRESHOLD = 0.6
+RELEVANCE_THRESHOLD = 1
 
 
 def _best_distance(chunks):
