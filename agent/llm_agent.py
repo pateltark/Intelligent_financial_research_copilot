@@ -33,9 +33,16 @@ client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 # 2 (opposite). Anything above this is treated as "not actually related
 # to the question" and short-circuits before an LLM call is even made —
 # cheaper than a Groq call, and doesn't rely on the model policing itself.
-# Tune this empirically: log a few real (question, best_distance) pairs
-# for on-topic vs. off-topic questions and set the cutoff between them.
-RELEVANCE_THRESHOLD = 1
+#
+# 0.6 turned out to be too strict — open-ended questions like "what is
+# this doc about?" don't share vocabulary with any single chunk even in
+# a genuinely relevant document, so their best-match distance runs
+# higher than a specific factual question's would. Loosened to 1.0
+# (roughly "not orthogonal") as a safer default. DEBUG_RELEVANCE=1
+# prints the actual distance for every query so you can tune this
+# against your real data instead of guessing again.
+RELEVANCE_THRESHOLD = 1.0
+DEBUG_RELEVANCE = os.getenv("DEBUG_RELEVANCE") == "1"
 
 
 def _best_distance(chunks):
@@ -55,7 +62,29 @@ def _best_distance(chunks):
 
 
 def _is_relevant(chunks, threshold: float = RELEVANCE_THRESHOLD) -> bool:
-    return _best_distance(chunks) <= threshold
+    distance = _best_distance(chunks)
+    if DEBUG_RELEVANCE:
+        print(f"[relevance] best_distance={distance:.4f} threshold={threshold}")
+    return distance <= threshold
+
+
+def _format_chunk_row(row) -> str:
+    """Prefixes chunk text with a page marker when page data is
+    available, so the model can cite it. Row shape varies by source:
+      - SEC (no page data yet):        (content, distance)
+      - PDF, single document:          (content, page_number, distance)
+      - PDF, multi-document compare:   (content, document_id, filename, page_number, distance)
+    """
+    content = row[0]
+    page_number = None
+    if len(row) == 3:
+        page_number = row[1]
+    elif len(row) == 5:
+        page_number = row[3]
+
+    if page_number:
+        return f"[p. {page_number}] {content}"
+    return content
 
 
 
@@ -76,11 +105,11 @@ def generate_answer(question: str, context_chunks, user_id: str, mode: str = "se
             if not doc_group:
                 continue
             label = labels[i] if labels and i < len(labels) else f"Document {i+1}"
-            body = "\n".join(row[0] for row in doc_group)
+            body = "\n".join(_format_chunk_row(row) for row in doc_group)
             sections.append(f"=== DOCUMENT: {label} ===\n{body}")
         formatted_context = "\n\n".join(sections)
     else:
-        flat_chunks = [chunk[0] for chunk in context_chunks]
+        flat_chunks = [_format_chunk_row(chunk) for chunk in context_chunks]
         formatted_context = "\n\n---\n\n".join(flat_chunks)
 
 
@@ -105,6 +134,7 @@ def generate_answer(question: str, context_chunks, user_id: str, mode: str = "se
     - Answer using ONLY the information in DOCUMENT CONTEXT above. Do not use any outside or general knowledge, even if you happen to know the answer.
     - If the context does not address the question, respond with EXACTLY this sentence and nothing else: "The provided document context does not contain enough information to answer this question." Do not follow it with an answer from general knowledge.
     - Otherwise, give a concise, clear answer based strictly on the provided context and previous history.
+    - Some context lines are prefixed with a page marker like "[p. 12]". When you use information from a marked line, cite the page inline, e.g. "Revenue grew 12% (p. 12)." Do not invent a page number for unmarked content.
     - If the context contains multiple documents (marked with "=== DOCUMENT: ... ==="), treat each as a separate source and refer to them by name when comparing.
     """
 
