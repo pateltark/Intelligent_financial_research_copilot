@@ -118,12 +118,14 @@ def _run_migrations():
                 embedding VECTOR(384),
                 source TEXT,
                 document_id TEXT,
+                page_number INTEGER,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         """)
 
         # Migrations for columns added after initial table creation
         cursor.execute("ALTER TABLE chat_emb ADD COLUMN IF NOT EXISTS document_id TEXT;")
+        cursor.execute("ALTER TABLE chat_emb ADD COLUMN IF NOT EXISTS page_number INTEGER;")
         cursor.execute("ALTER TABLE chat_history ADD COLUMN IF NOT EXISTS mode VARCHAR(20) DEFAULT 'sec';")
         cursor.execute("ALTER TABLE documents ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'ready';")
 
@@ -308,15 +310,15 @@ def delete_document(user_id, document_id):
 
 
 # ── PDF RAG embeddings ──────────────────────────────────────
-def save_emb(content, user_id, embedding, source=None, document_id=None):
+def save_emb(content, user_id, embedding, source=None, document_id=None, page_number=None):
     emb_json = json.dumps(embedding)
     with get_db() as cursor:
         cursor.execute(
             """
-            INSERT INTO chat_emb (content, user_id, embedding, source, document_id)
-            VALUES (%s, %s, %s, %s, %s)
+            INSERT INTO chat_emb (content, user_id, embedding, source, document_id, page_number)
+            VALUES (%s, %s, %s, %s, %s, %s)
             """,
-            (content, user_id, emb_json, source, document_id),
+            (content, user_id, emb_json, source, document_id, page_number),
         )
 
 
@@ -326,7 +328,7 @@ def related_chunks(user_id, question, k=3, document_ids=None):
         if document_ids:
             cursor.execute(
                 """
-                SELECT content, embedding <=> %s::vector AS distance
+                SELECT content, page_number, embedding <=> %s::vector AS distance
                 FROM chat_emb
                 WHERE user_id = %s AND document_id = ANY(%s)
                 ORDER BY distance
@@ -337,7 +339,7 @@ def related_chunks(user_id, question, k=3, document_ids=None):
         else:
             cursor.execute(
                 """
-                SELECT content, embedding <=> %s::vector AS distance
+                SELECT content, page_number, embedding <=> %s::vector AS distance
                 FROM chat_emb
                 WHERE user_id = %s
                 ORDER BY distance
@@ -355,7 +357,7 @@ def related_chunks_per_doc(user_id, question, document_ids, k_per_doc=4):
         for doc_id in document_ids:
             cursor.execute(
                 """
-                SELECT ce.content, ce.document_id, d.filename,
+                SELECT ce.content, ce.document_id, d.filename, ce.page_number,
                        ce.embedding <=> %s::vector AS distance
                 FROM chat_emb ce
                 JOIN documents d ON d.id = ce.document_id
