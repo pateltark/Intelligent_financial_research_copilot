@@ -44,6 +44,42 @@ client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 RELEVANCE_THRESHOLD = 1.0
 DEBUG_RELEVANCE = os.getenv("DEBUG_RELEVANCE") == "1"
 
+# for intent based que..
+
+def contextualize_question(question: str, user_id: str, mode: str = "sec") -> str:
+    """
+    Rewrites vague follow-up questions (e.g., "tell me more about it") 
+    into standalone search queries using conversation history.
+    """
+    history = load_chat(user_id, mode=mode)[-4:]
+    if not history:
+        return question
+
+    history_text = "\n".join([f"{m['role']}: {m['content']}" for m in history])
+    
+    rewrite_prompt = f"""Given the following conversation history and a follow-up question, rephrase the follow-up question to be a standalone search query that contains all necessary context (names, topics, document references). Do NOT answer the question, just rewrite it.
+
+Chat History:
+{history_text}
+
+Follow-up Question: {question}
+
+Standalone Search Query:"""
+
+    try:
+        response = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[{"role": "user", "content": rewrite_prompt}],
+            temperature=0.0
+        )
+        rewritten = response.choices[0].message.content.strip()
+        print(f"[Query Rewriter] Originally: '{question}' -> Rewritten: '{rewritten}'")
+        return rewritten
+    except Exception as e:
+        print(f"[Query Rewriter Error] {e}")
+        return question
+
+
 
 def _best_distance(chunks):
     """chunks: either a flat list of rows (each row's last element is the
@@ -61,11 +97,13 @@ def _best_distance(chunks):
     return min(distances) if distances else float("inf")
 
 
+
 def _is_relevant(chunks, threshold: float = RELEVANCE_THRESHOLD) -> bool:
     distance = _best_distance(chunks)
     if DEBUG_RELEVANCE:
         print(f"[relevance] best_distance={distance:.4f} threshold={threshold}")
     return distance <= threshold
+
 
 
 def _format_chunk_row(row) -> str:
@@ -178,7 +216,12 @@ def ask_sec(question: str, user_id: str):
         )
 
         if not chunks or not _is_relevant(chunks):
-            return "No relevant SEC context found."
+            context_query = contextualize_question(question, user_id)
+
+            chunks = related_sec_chunks(
+                document_id=active_doc["document_id"],
+                question=context_query
+            )
 
         return generate_answer(question, chunks, user_id, mode="sec")
 
@@ -278,7 +321,17 @@ def ask_sec(question: str, user_id: str):
             sec_labels.append(f"{request.ticker} {request.form_type}")
 
     if not sec_chunks or not _is_relevant(sec_chunks):
-        return "No relevant SEC context found."
+        context_query = contextualize_question(question, user_id)
+
+        doc_chunks = related_sec_chunks(
+            document_id=document_id,
+            question=context_query
+        )   
+        if doc_chunks:
+            sec_chunks.append(doc_chunks)
+            sec_labels.append(f"{request.ticker} {request.form_type}")
+
+        # return "No relevant SEC context found."
 
     set_active_set(user_id, touched_docs)
 
