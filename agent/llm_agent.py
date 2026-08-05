@@ -218,7 +218,7 @@ def ask_sec(question: str, user_id: str):
         if not chunks or not _is_relevant(chunks):
             context_query = contextualize_question(question, user_id)
 
-            chunks = related_sec_chunks(
+            chunks = related_chunks(
                 document_id=active_doc["document_id"],
                 question=context_query
             )
@@ -323,7 +323,7 @@ def ask_sec(question: str, user_id: str):
     if not sec_chunks or not _is_relevant(sec_chunks):
         context_query = contextualize_question(question, user_id)
 
-        doc_chunks = related_sec_chunks(
+        doc_chunks = related_chunks(
             document_id=document_id,
             question=context_query
         )   
