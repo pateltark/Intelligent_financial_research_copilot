@@ -128,6 +128,15 @@ def _run_migrations():
         cursor.execute("ALTER TABLE chat_emb ADD COLUMN IF NOT EXISTS page_number INTEGER;")
         cursor.execute("ALTER TABLE chat_history ADD COLUMN IF NOT EXISTS mode VARCHAR(20) DEFAULT 'sec';")
         cursor.execute("ALTER TABLE documents ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'ready';")
+        cursor.execute("""
+                    CREATE INDEX IF NOT EXISTS sec_vectors_fts_idx 
+                    ON sec_vectors USING GIN (to_tsvector('english', content));
+                """)
+
+        cursor.execute("""
+                    CREATE INDEX IF NOT EXISTS chat_emb_fts_idx 
+                    ON chat_emb USING GIN (to_tsvector('english', content));
+                """)
 
 
 _run_migrations()
@@ -148,20 +157,58 @@ def save_sec_vector(document_id: int, ticker: str, form_type: str, filename: str
         )
 
 
-def related_sec_chunks(document_id: int, question: str, k: int = 5):
-    query_embedding = model.encode(question).tolist()
+def related_sec_chunks(document_id: int, question: str, k: int = 5, k_rrf: int = 60):
+    """
+    Combines Vector Search (<=> cosine distance) with PostgreSQL Full-Text Search (plainto_tsquery)
+    using Reciprocal Rank Fusion (RRF).
+    """
+    query_embedding = json.dumps(model.encode(question).tolist())
+    
+    sql = """
+    WITH semantic_search AS (
+        SELECT 
+            id, content,
+            ROW_NUMBER() OVER (ORDER BY embedding <=> %s::vector) AS rank,
+            (embedding <=> %s::vector) AS distance
+        FROM sec_vectors
+        WHERE document_id = %s
+        ORDER BY distance
+        LIMIT 20
+    ),
+    keyword_search AS (
+        SELECT 
+            id, content,
+            ROW_NUMBER() OVER (ORDER BY ts_rank_cd(to_tsvector('english', content), query) DESC) AS rank
+        FROM sec_vectors, plainto_tsquery('english', %s) query
+        WHERE document_id = %s 
+          AND to_tsvector('english', content) @@ query
+        ORDER BY ts_rank_cd(to_tsvector('english', content), query) DESC
+        LIMIT 20
+    )
+    SELECT 
+        COALESCE(s.content, k.content) AS content,
+        COALESCE(s.distance, 1.0) AS distance,
+        (
+            COALESCE(1.0 / (%s + s.rank), 0.0) +
+            COALESCE(1.0 / (%s + k.rank), 0.0)
+        ) AS rrf_score
+    FROM semantic_search s
+    FULL OUTER JOIN keyword_search k ON s.id = k.id
+    ORDER BY rrf_score DESC
+    LIMIT %s;
+    """
+
     with get_db() as cursor:
-        cursor.execute(
-            """
-            SELECT content, embedding <=> %s::vector AS distance
-            FROM sec_vectors
-            WHERE document_id = %s
-            ORDER BY distance
-            LIMIT %s
-            """,
-            (json.dumps(query_embedding), document_id, k),
-        )
-        return cursor.fetchall()
+        cursor.execute(sql, (
+            query_embedding, query_embedding, document_id,  # Semantic params
+            question, document_id,                          # Keyword params
+            k_rrf, k_rrf,                                   # RRF constant params
+            k                                               # Limit
+        ))
+        rows = cursor.fetchall()
+
+    # Returns [(content, distance), ...] matching existing format
+    return [(row[0], row[1]) for row in rows]
 
 
 def get_sec_document(ticker, form_type):
@@ -322,32 +369,62 @@ def save_emb(content, user_id, embedding, source=None, document_id=None, page_nu
         )
 
 
-def related_chunks(user_id, question, k=3, document_ids=None):
-    query_embedding = model.encode(question).tolist()
+def related_chunks(user_id: str, question: str, k: int = 4, document_ids: list[str] | None = None, k_rrf: int = 60):
+    query_embedding = json.dumps(model.encode(question).tolist())
+    
+    # Dynamic SQL WHERE filters depending on document_ids presence
+    doc_filter = "AND document_id = ANY(%s)" if document_ids else ""
+    params_semantic = [query_embedding, query_embedding, user_id]
+    if document_ids:
+        params_semantic.append(document_ids)
+        
+    params_keyword = [question, user_id]
+    if document_ids:
+        params_keyword.append(document_ids)
+
+    sql = f"""
+    WITH semantic_search AS (
+        SELECT 
+            id, content, page_number,
+            ROW_NUMBER() OVER (ORDER BY embedding <=> %s::vector) AS rank,
+            (embedding <=> %s::vector) AS distance
+        FROM chat_emb
+        WHERE user_id = %s {doc_filter}
+        ORDER BY distance
+        LIMIT 20
+    ),
+    keyword_search AS (
+        SELECT 
+            id, content, page_number,
+            ROW_NUMBER() OVER (ORDER BY ts_rank_cd(to_tsvector('english', content), query) DESC) AS rank
+        FROM chat_emb, plainto_tsquery('english', %s) query
+        WHERE user_id = %s {doc_filter}
+          AND to_tsvector('english', content) @@ query
+        ORDER BY ts_rank_cd(to_tsvector('english', content), query) DESC
+        LIMIT 20
+    )
+    SELECT 
+        COALESCE(s.content, k.content) AS content,
+        COALESCE(s.page_number, k.page_number) AS page_number,
+        COALESCE(s.distance, 1.0) AS distance,
+        (
+            COALESCE(1.0 / (%s + s.rank), 0.0) +
+            COALESCE(1.0 / (%s + k.rank), 0.0)
+        ) AS rrf_score
+    FROM semantic_search s
+    FULL OUTER JOIN keyword_search k ON s.id = k.id
+    ORDER BY rrf_score DESC
+    LIMIT %s;
+    """
+
+    all_params = params_semantic + params_keyword + [k_rrf, k_rrf, k]
+
     with get_db() as cursor:
-        if document_ids:
-            cursor.execute(
-                """
-                SELECT content, page_number, embedding <=> %s::vector AS distance
-                FROM chat_emb
-                WHERE user_id = %s AND document_id = ANY(%s)
-                ORDER BY distance
-                LIMIT %s
-                """,
-                (json.dumps(query_embedding), user_id, document_ids, k),
-            )
-        else:
-            cursor.execute(
-                """
-                SELECT content, page_number, embedding <=> %s::vector AS distance
-                FROM chat_emb
-                WHERE user_id = %s
-                ORDER BY distance
-                LIMIT %s
-                """,
-                (json.dumps(query_embedding), user_id, k),
-            )
-        return cursor.fetchall()
+        cursor.execute(sql, all_params)
+        rows = cursor.fetchall()
+
+    # Returns [(content, page_number, distance), ...] matching existing format
+    return [(row[0], row[1], row[2]) for row in rows]
 
 
 def related_chunks_per_doc(user_id, question, document_ids, k_per_doc=4):
