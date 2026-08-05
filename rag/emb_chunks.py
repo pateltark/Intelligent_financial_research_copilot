@@ -4,6 +4,7 @@ from sentence_transformers import SentenceTransformer
 from langchain_core.documents import Document
 from concurrent.futures import ThreadPoolExecutor
 
+import json
 from groq import Groq
 import os
 from dotenv import load_dotenv
@@ -43,6 +44,7 @@ model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
 _ingest_executor = ThreadPoolExecutor(max_workers=2)
 
 
+
 def submit_ingest_job(pdf_path: str, user_id: str, document_id: str, filename: str):
     """Queue a PDF for background ingestion. Returns immediately — the
     caller (the /upload route) doesn't wait for extraction to finish."""
@@ -67,37 +69,64 @@ def ingest_text(
     text: str,
     user_id: str,
     source: str = None,
-    document_id: str = None
+    document_id: str = None,
 ):
+    def clean_string(value):
+        if value is None:
+            return None
+        if isinstance(value, str):
+            return value.replace("\x00", "")
+        return value
+
+    # Clean input strings
+    text = clean_string(text)
+    user_id = clean_string(user_id)
+    source = clean_string(source)
+    document_id = clean_string(document_id)
 
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=400,
-        chunk_overlap=60
+        chunk_overlap=60,
     )
 
     docs = [
         Document(
             page_content=text,
-            metadata={"source": source} if source else {}
+            metadata={"source": source} if source else {},
         )
     ]
 
     chunks = splitter.split_documents(docs)
 
-    for chunk in chunks:
-        emb = model.encode(chunk.page_content).tolist()
+    for i, chunk in enumerate(chunks):
 
-        save_emb(
-            content=chunk.page_content,
-            user_id=user_id,
-            embedding=emb,
-            source=chunk.metadata.get("source"),
-            document_id=document_id
-            # page_number intentionally omitted — pypdf has no page
-            # provenance per chunk the way Docling's HybridChunker did.
-            # save_emb defaults it to None, and generate_answer skips
-            # the citation marker for chunks with no page_number.
-        )
+        clean_content = clean_string(chunk.page_content)
+        clean_source = clean_string(chunk.metadata.get("source"))
+
+        emb = model.encode(clean_content).tolist()
+
+
+        emb_json = json.dumps(emb)
+        # print("emb_json null:", "\x00" in emb_json)
+
+        try:
+            save_emb(
+                content=clean_content,
+                user_id=user_id,
+                embedding=emb,
+                source=clean_source,
+                document_id=document_id,
+            )
+        except Exception as e:
+            print("\n===== SAVE_EMB ERROR =====")
+            print(type(e).__name__, e)
+            print("content type :", type(clean_content))
+            print("user_id type :", type(user_id))
+            print("source type  :", type(clean_source))
+            print("doc_id type  :", type(document_id))
+            print("embedding type:", type(emb))
+            print("embedding len :", len(emb))
+            raise
 
     return True
 
@@ -142,6 +171,11 @@ def create_vectorstore(
     pages = loader.load()
 
     text = "\n".join(page.page_content for page in pages)
+    print("Contains NUL:", "\x00" in text)
+
+    if "\x00" in text:
+        print("NUL found! Cleaning text...")
+        text = text.replace("\x00", "")
 
     if not text or len(text.strip()) < 50:
         # Without this check, an empty/near-empty extraction still

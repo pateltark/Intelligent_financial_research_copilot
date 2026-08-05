@@ -218,7 +218,7 @@ def ask_sec(question: str, user_id: str):
         if not chunks or not _is_relevant(chunks):
             context_query = contextualize_question(question, user_id)
 
-            chunks = related_chunks(
+            chunks = related_sec_chunks(
                 document_id=active_doc["document_id"],
                 question=context_query
             )
@@ -323,10 +323,10 @@ def ask_sec(question: str, user_id: str):
     if not sec_chunks or not _is_relevant(sec_chunks):
         context_query = contextualize_question(question, user_id)
 
-        doc_chunks = related_chunks(
+        doc_chunks = related_sec_chunks(
             document_id=document_id,
             question=context_query
-        )   
+        )
         if doc_chunks:
             sec_chunks.append(doc_chunks)
             sec_labels.append(f"{request.ticker} {request.form_type}")
@@ -353,7 +353,7 @@ def ask_upload(question: str, user_id: str, document_ids: list[str] | None = Non
         labels = [group[0][2] if group else "Unknown" for group in chunks]  # row = (content, document_id, filename, distance)
         return generate_answer(question, chunks, user_id=user_id, mode="doc", labels=labels)
     else:
-        chunks = related_chunks(user_id=user_id, question=question, document_ids=document_ids)
+        chunks = related_chunks_per_doc(user_id=user_id, question=question, document_ids=document_ids)
         if not chunks or not _is_relevant(chunks):
             return NOT_ENOUGH_INFO
         return generate_answer(question, chunks, user_id=user_id, mode="doc")
