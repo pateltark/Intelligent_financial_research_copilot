@@ -106,19 +106,33 @@ def _run_migrations():
                 filename TEXT NOT NULL,
                 chunk_index INTEGER NOT NULL,
                 content TEXT NOT NULL,
-                embedding VECTOR(384)
+
+                embedding VECTOR(384),
+
+                content_tsvector TSVECTOR GENERATED ALWAYS AS (
+                    to_tsvector('english', coalesce(content,''))
+                ) STORED
             );
         """)
 
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS chat_emb (
                 id SERIAL PRIMARY KEY,
+
                 user_id TEXT NOT NULL,
+
                 content TEXT NOT NULL,
+
                 embedding VECTOR(384),
+
+                content_tsvector TSVECTOR GENERATED ALWAYS AS (
+                    to_tsvector('english', coalesce(content,''))
+                ) STORED,
+
                 source TEXT,
                 document_id TEXT,
                 page_number INTEGER,
+
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         """)
@@ -129,14 +143,45 @@ def _run_migrations():
         cursor.execute("ALTER TABLE chat_history ADD COLUMN IF NOT EXISTS mode VARCHAR(20) DEFAULT 'sec';")
         cursor.execute("ALTER TABLE documents ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'ready';")
         cursor.execute("""
-                    CREATE INDEX IF NOT EXISTS sec_vectors_fts_idx 
-                    ON sec_vectors USING GIN (to_tsvector('english', content));
-                """)
+                    CREATE INDEX IF NOT EXISTS chat_emb_vector_idx
+                    ON chat_emb
+                    USING hnsw (embedding vector_cosine_ops);
+                    """)
+
 
         cursor.execute("""
-                    CREATE INDEX IF NOT EXISTS chat_emb_fts_idx 
-                    ON chat_emb USING GIN (to_tsvector('english', content));
-                """)
+                        CREATE INDEX IF NOT EXISTS sec_vectors_vector_idx
+                        ON sec_vectors
+                        USING hnsw (embedding vector_cosine_ops);
+                        """)
+
+
+        cursor.execute("""
+                    ALTER TABLE chat_emb
+                    ADD COLUMN IF NOT EXISTS content_tsvector TSVECTOR
+                    GENERATED ALWAYS AS (
+                        to_tsvector('english', coalesce(content,''))
+                    ) STORED;
+         
+                    """)
+
+        cursor.execute("""
+                    ALTER TABLE sec_vectors
+                    ADD COLUMN IF NOT EXISTS content_tsvector TSVECTOR
+                    GENERATED ALWAYS AS (
+                        to_tsvector('english', coalesce(content,''))
+                    ) STORED;
+        """)
+
+        cursor.execute("""
+                    CREATE INDEX IF NOT EXISTS chat_emb_user_doc_idx
+                    ON chat_emb(user_id, document_id);
+                    """)
+
+        cursor.execute("""
+                        CREATE INDEX IF NOT EXISTS sec_vectors_doc_idx
+                        ON sec_vectors(document_id);
+                        """)
 
 
 _run_migrations()
@@ -178,11 +223,13 @@ def related_sec_chunks(document_id: int, question: str, k: int = 5, k_rrf: int =
     keyword_search AS (
         SELECT 
             id, content,
-            ROW_NUMBER() OVER (ORDER BY ts_rank_cd(to_tsvector('english', content), query) DESC) AS rank
-        FROM sec_vectors, plainto_tsquery('english', %s) query
+            ROW_NUMBER() OVER (
+                ORDER BY ts_rank_cd(to_tsvector('english', content), plainto_tsquery('english', %s)) DESC
+            ) AS rank
+        FROM sec_vectors
         WHERE document_id = %s 
-          AND to_tsvector('english', content) @@ query
-        ORDER BY ts_rank_cd(to_tsvector('english', content), query) DESC
+          AND to_tsvector('english', content) @@ plainto_tsquery('english', %s)
+        ORDER BY ts_rank_cd(to_tsvector('english', content), plainto_tsquery('english', %s)) DESC
         LIMIT 20
     )
     SELECT 
@@ -200,15 +247,15 @@ def related_sec_chunks(document_id: int, question: str, k: int = 5, k_rrf: int =
 
     with get_db() as cursor:
         cursor.execute(sql, (
-            query_embedding, query_embedding, document_id,  # Semantic params
-            question, document_id,                          # Keyword params
+            query_embedding, query_embedding, document_id,  # Semantic CTE params
+            question, document_id, question, question,     # Keyword CTE params
             k_rrf, k_rrf,                                   # RRF constant params
             k                                               # Limit
         ))
         rows = cursor.fetchall()
 
-    # Returns [(content, distance), ...] matching existing format
     return [(row[0], row[1]) for row in rows]
+
 
 
 def get_sec_document(ticker, form_type):
@@ -427,26 +474,64 @@ def related_chunks(user_id: str, question: str, k: int = 4, document_ids: list[s
     return [(row[0], row[1], row[2]) for row in rows]
 
 
-def related_chunks_per_doc(user_id, question, document_ids, k_per_doc=4):
-    query_embedding = model.encode(question).tolist()
+def related_chunks_per_doc(user_id: str, question: str, document_ids: list[str], k_per_doc: int = 4, k_rrf: int = 60):
+    query_embedding = json.dumps(model.encode(question).tolist())
     results = []
+    
+    sql = """
+    WITH semantic_search AS (
+        SELECT 
+            ce.content, ce.document_id, d.filename, ce.page_number, ce.id,
+            ROW_NUMBER() OVER (ORDER BY ce.embedding <=> %s::vector) AS rank,
+            (ce.embedding <=> %s::vector) AS distance
+        FROM chat_emb ce
+        JOIN documents d ON d.id = ce.document_id
+        WHERE ce.user_id = %s AND ce.document_id = %s
+        ORDER BY distance
+        LIMIT 20
+    ),
+    keyword_search AS (
+        SELECT 
+            ce.content, ce.document_id, d.filename, ce.page_number, ce.id,
+            ROW_NUMBER() OVER (ORDER BY ts_rank_cd(to_tsvector('english', ce.content), query) DESC) AS rank
+        FROM chat_emb ce
+        JOIN documents d ON d.id = ce.document_id,
+        plainto_tsquery('english', %s) query
+        WHERE ce.user_id = %s AND ce.document_id = %s
+          AND to_tsvector('english', ce.content) @@ query
+        ORDER BY ts_rank_cd(to_tsvector('english', ce.content), query) DESC
+        LIMIT 20
+    )
+    SELECT 
+        COALESCE(s.content, k.content) AS content,
+        COALESCE(s.document_id, k.document_id) AS document_id,
+        COALESCE(s.filename, k.filename) AS filename,
+        COALESCE(s.page_number, k.page_number) AS page_number,
+        COALESCE(s.distance, 1.0) AS distance,
+        (
+            COALESCE(1.0 / (%s + s.rank), 0.0) +
+            COALESCE(1.0 / (%s + k.rank), 0.0)
+        ) AS rrf_score
+    FROM semantic_search s
+    FULL OUTER JOIN keyword_search k ON s.id = k.id
+    ORDER BY rrf_score DESC
+    LIMIT %s;
+    """
+
     with get_db() as cursor:
         for doc_id in document_ids:
             cursor.execute(
-                """
-                SELECT ce.content, ce.document_id, d.filename, ce.page_number,
-                       ce.embedding <=> %s::vector AS distance
-                FROM chat_emb ce
-                JOIN documents d ON d.id = ce.document_id
-                WHERE ce.user_id = %s AND ce.document_id = %s
-                ORDER BY distance
-                LIMIT %s
-                """,
-                (json.dumps(query_embedding), user_id, doc_id, k_per_doc),
+                sql,
+                (
+                    query_embedding, query_embedding, user_id, doc_id,  # Semantic params
+                    question, user_id, doc_id,                          # Keyword params
+                    k_rrf, k_rrf,                                       # RRF constant params
+                    k_per_doc                                           # Limit per document
+                )
             )
             results.append(cursor.fetchall())
+            
     return results
-
 
 # ── Chat history ────────────────────────────────────────────
 def save_chat(user_id, role, content, mode='sec'):
