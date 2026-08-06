@@ -130,3 +130,23 @@ export async function deleteDocument(documentId) {
   if (!res.ok) throw new Error(data.detail || "Delete failed.");
   return data;
 }
+
+export async function getChatHistory(mode) {
+  const res = await fetch(`${BASE}/chat/history?mode=${mode}`, {
+    method: "GET",
+    headers: authHeaders(),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.detail || "Failed to load chat history.");
+  return data; // { messages }
+}
+
+export async function clearChatHistory(mode) {
+  const res = await fetch(`${BASE}/chat/history?mode=${mode}`, {
+    method: "DELETE",
+    headers: authHeaders(),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.detail || "Failed to clear chat history.");
+  return data;
+}

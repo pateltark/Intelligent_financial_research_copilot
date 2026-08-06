@@ -272,6 +272,21 @@ textarea {
   color: var(--error);
 }
 
+.btn-clear {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  border-radius: 6px;
+  padding: 0.3rem 0.7rem;
+  font-size: 0.8rem;
+  transition: all 0.15s;
+}
+
+.btn-clear:hover {
+  border-color: var(--error);
+  color: var(--error);
+}
+
 .error-banner {
   display: flex;
   align-items: center;
@@ -398,6 +413,22 @@ textarea {
 .doc-status-pill.failed {
   background: rgba(248, 113, 113, 0.12);
   color: var(--error);
+}
+
+.upload-spinner {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  border: 2px solid var(--muted);
+  border-top-color: var(--accent);
+  flex-shrink: 0;
+  animation: spin 0.7s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .doc-label-disabled {

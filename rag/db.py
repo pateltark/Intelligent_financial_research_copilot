@@ -8,7 +8,14 @@ from psycopg2 import pool
 from sentence_transformers import SentenceTransformer
 from dotenv import load_dotenv
 
+
+import os
+import psycopg2.pool
+from dotenv import load_dotenv
+
+# Load variables from .env file into os.environ
 load_dotenv()
+
 
 model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
 
@@ -31,7 +38,6 @@ connection_pool = psycopg2.pool.ThreadedConnectionPool(
     host=os.getenv("DB_HOST", "localhost"),
     port=int(os.getenv("DB_PORT", "5432")),
 )
-
 
 @contextmanager
 def get_db():
@@ -203,37 +209,36 @@ def save_sec_vector(document_id: int, ticker: str, form_type: str, filename: str
 
 
 def related_sec_chunks(document_id: int, question: str, k: int = 5, k_rrf: int = 60):
-    """
-    Combines Vector Search (<=> cosine distance) with PostgreSQL Full-Text Search (plainto_tsquery)
-    using Reciprocal Rank Fusion (RRF).
-    """
     query_embedding = json.dumps(model.encode(question).tolist())
     
     sql = """
     WITH semantic_search AS (
         SELECT 
-            id, content,
-            ROW_NUMBER() OVER (ORDER BY embedding <=> %s::vector) AS rank,
-            (embedding <=> %s::vector) AS distance
-        FROM sec_vectors
-        WHERE document_id = %s
+            sv.id, sv.content, sv.ticker, sv.form_type, sv.filename,
+            ROW_NUMBER() OVER (ORDER BY sv.embedding <=> %s::vector) AS rank,
+            (sv.embedding <=> %s::vector) AS distance
+        FROM sec_vectors sv
+        WHERE sv.document_id = %s
         ORDER BY distance
         LIMIT 20
     ),
     keyword_search AS (
         SELECT 
-            id, content,
+            sv.id, sv.content, sv.ticker, sv.form_type, sv.filename,
             ROW_NUMBER() OVER (
-                ORDER BY ts_rank_cd(to_tsvector('english', content), plainto_tsquery('english', %s)) DESC
+                ORDER BY ts_rank_cd(sv.content_tsvector, plainto_tsquery('english', %s)) DESC
             ) AS rank
-        FROM sec_vectors
-        WHERE document_id = %s 
-          AND to_tsvector('english', content) @@ plainto_tsquery('english', %s)
-        ORDER BY ts_rank_cd(to_tsvector('english', content), plainto_tsquery('english', %s)) DESC
+        FROM sec_vectors sv
+        WHERE sv.document_id = %s 
+          AND sv.content_tsvector @@ plainto_tsquery('english', %s)
+        ORDER BY ts_rank_cd(sv.content_tsvector, plainto_tsquery('english', %s)) DESC
         LIMIT 20
     )
     SELECT 
         COALESCE(s.content, k.content) AS content,
+        COALESCE(s.ticker, k.ticker) AS ticker,
+        COALESCE(s.form_type, k.form_type) AS form_type,
+        COALESCE(s.filename, k.filename) AS filename,
         COALESCE(s.distance, 1.0) AS distance,
         (
             COALESCE(1.0 / (%s + s.rank), 0.0) +
@@ -247,14 +252,15 @@ def related_sec_chunks(document_id: int, question: str, k: int = 5, k_rrf: int =
 
     with get_db() as cursor:
         cursor.execute(sql, (
-            query_embedding, query_embedding, document_id,  # Semantic CTE params
-            question, document_id, question, question,     # Keyword CTE params
-            k_rrf, k_rrf,                                   # RRF constant params
-            k                                               # Limit
+            query_embedding, query_embedding, document_id,
+            question, document_id, question, question,
+            k_rrf, k_rrf,
+            k
         ))
         rows = cursor.fetchall()
 
-    return [(row[0], row[1]) for row in rows]
+    # Returns [(content, ticker, form_type, filename, distance), ...]
+    return [(row[0], row[1], row[2], row[3], row[4]) for row in rows]
 
 
 
@@ -474,38 +480,56 @@ def related_chunks(user_id: str, question: str, k: int = 4, document_ids: list[s
     return [(row[0], row[1], row[2]) for row in rows]
 
 
-def related_chunks_per_doc(user_id: str, question: str, document_ids: list[str], k_per_doc: int = 4, k_rrf: int = 60):
+def related_chunks_per_doc(
+    user_id: str, 
+    question: str, 
+    document_ids: list[str], 
+    k_per_doc: int = 10,   # 1. Increased default candidate count from 4 to 10
+    k_rrf: int = 60
+):
     query_embedding = json.dumps(model.encode(question).tolist())
+    
+    # 2. Scale CTE limit so RRF always has enough depth to fuse semantic + keyword results
+    cte_limit = max(30, k_per_doc * 3)
+    
     results = []
     
     sql = """
     WITH semantic_search AS (
         SELECT 
-            ce.content, ce.document_id, d.filename, ce.page_number, ce.id,
+            ce.id,
+            ce.content, 
+            ce.document_id, 
+            d.filename, 
+            ce.page_number, 
             ROW_NUMBER() OVER (ORDER BY ce.embedding <=> %s::vector) AS rank,
             (ce.embedding <=> %s::vector) AS distance
         FROM chat_emb ce
-        JOIN documents d ON d.id = ce.document_id
+        LEFT JOIN documents d ON d.id = ce.document_id
         WHERE ce.user_id = %s AND ce.document_id = %s
         ORDER BY distance
-        LIMIT 20
+        LIMIT %s
     ),
     keyword_search AS (
         SELECT 
-            ce.content, ce.document_id, d.filename, ce.page_number, ce.id,
-            ROW_NUMBER() OVER (ORDER BY ts_rank_cd(to_tsvector('english', ce.content), query) DESC) AS rank
+            ce.id,
+            ce.content, 
+            ce.document_id, 
+            d.filename, 
+            ce.page_number, 
+            ROW_NUMBER() OVER (ORDER BY ts_rank_cd(ce.content_tsvector, query) DESC) AS rank
         FROM chat_emb ce
-        JOIN documents d ON d.id = ce.document_id,
+        LEFT JOIN documents d ON d.id = ce.document_id,
         plainto_tsquery('english', %s) query
         WHERE ce.user_id = %s AND ce.document_id = %s
-          AND to_tsvector('english', ce.content) @@ query
-        ORDER BY ts_rank_cd(to_tsvector('english', ce.content), query) DESC
-        LIMIT 20
+          AND ce.content_tsvector @@ query
+        ORDER BY ts_rank_cd(ce.content_tsvector, query) DESC
+        LIMIT %s
     )
     SELECT 
         COALESCE(s.content, k.content) AS content,
         COALESCE(s.document_id, k.document_id) AS document_id,
-        COALESCE(s.filename, k.filename) AS filename,
+        COALESCE(s.filename, k.filename, 'Uploaded Document') AS filename,
         COALESCE(s.page_number, k.page_number) AS page_number,
         COALESCE(s.distance, 1.0) AS distance,
         (
@@ -523,15 +547,16 @@ def related_chunks_per_doc(user_id: str, question: str, document_ids: list[str],
             cursor.execute(
                 sql,
                 (
-                    query_embedding, query_embedding, user_id, doc_id,  # Semantic params
-                    question, user_id, doc_id,                          # Keyword params
-                    k_rrf, k_rrf,                                       # RRF constant params
-                    k_per_doc                                           # Limit per document
+                    query_embedding, query_embedding, user_id, doc_id, cte_limit,  # Semantic params
+                    question, user_id, doc_id, cte_limit,                         # Keyword params
+                    k_rrf, k_rrf,                                                 # RRF constant params
+                    k_per_doc                                                     # Final return limit per doc
                 )
             )
             results.append(cursor.fetchall())
             
     return results
+
 
 # ── Chat history ────────────────────────────────────────────
 def save_chat(user_id, role, content, mode='sec'):
@@ -569,3 +594,17 @@ def load_chat(user_id, mode=None):
             )
         rows = cursor.fetchall()
     return [{"role": "user" if role == "user" else "assistant", "content": content} for role, content in rows]
+
+
+def clear_chat(user_id: str, mode: str = None):
+    with get_db() as cursor:
+        if mode:
+            cursor.execute(
+                "DELETE FROM chat_history WHERE user_id = %s AND mode = %s",
+                (user_id, mode),
+            )
+        else:
+            cursor.execute(
+                "DELETE FROM chat_history WHERE user_id = %s",
+                (user_id,),
+            )

@@ -10,6 +10,8 @@ import {
   deleteDocument,
   getSecActive,
   listSecDocuments,
+  getChatHistory,
+  clearChatHistory,
 } from "./api.js";
 import "./App.css";
 
@@ -19,18 +21,22 @@ function isLoggedIn() {
 }
 
 // ── PDF Upload Component ──────────────────────────────────
-function PDFUpload({ onUploaded, setError }) {
+function PDFUpload({ onUploadStart, onUploaded, onUploadError }) {
   const inputRef = useRef(null);
 
   async function handleFile(e) {
     const file = e.target.files?.[0];
     if (!file) return;
+
+    const tempId = `pending-${Date.now()}`;
+    onUploadStart({ id: tempId, filename: file.name });
+    if (inputRef.current) inputRef.current.value = "";
+
     try {
       await uploadPDF(file);
-      onUploaded();
-      if (inputRef.current) inputRef.current.value = "";
+      onUploaded(tempId);
     } catch (err) {
-      setError(err.message);
+      onUploadError(tempId, err.message);
     }
   }
 
@@ -51,8 +57,11 @@ function DocSidebar({
   onClearAll,
   onDelete,
   maxSelect,
+  onUploadStart,
   onUploaded,
-  setError,
+  onUploadError,
+  pendingUploads,
+  onDismissPending,
 }) {
   const atLimit = selectedIds.length >= maxSelect;
 
@@ -63,6 +72,8 @@ function DocSidebar({
       onDelete(doc.id);
     }
   }
+
+  const isEmpty = documents.length === 0 && pendingUploads.length === 0;
 
   return (
     <aside className="doc-sidebar">
@@ -77,10 +88,32 @@ function DocSidebar({
       </div>
 
       <div className="doc-list-scroll">
-        {documents.length === 0 ? (
+        {isEmpty ? (
           <div className="doc-sidebar-empty">No PDFs uploaded yet.</div>
         ) : (
           <ul className="doc-list">
+            {pendingUploads.map((p) => (
+              <li key={p.id} className="doc-item">
+                <label className="doc-label-disabled" title={p.status === "failed" ? p.error : "Processing..."}>
+                  {p.status === "processing" && <span className="upload-spinner" />}
+                  <span className="doc-filename">{p.filename}</span>
+                </label>
+                {p.status === "processing" ? (
+                  <span className="doc-status-pill processing">Processing…</span>
+                ) : (
+                  <>
+                    <span className="doc-status-pill failed">Failed</span>
+                    <button
+                      className="doc-delete-btn"
+                      title="Dismiss"
+                      onClick={() => onDismissPending(p.id)}
+                    >
+                      ✕
+                    </button>
+                  </>
+                )}
+              </li>
+            ))}
             {documents.map((doc) => {
               const isSelected = selectedIds.includes(doc.id);
               const disableCheckbox = atLimit && !isSelected;
@@ -113,7 +146,7 @@ function DocSidebar({
       </div>
 
       <div className="doc-sidebar-footer">
-        <PDFUpload onUploaded={onUploaded} setError={setError} />
+        <PDFUpload onUploadStart={onUploadStart} onUploaded={onUploaded} onUploadError={onUploadError} />
       </div>
     </aside>
   );
@@ -401,6 +434,26 @@ function ChatPage({ onLogout }) {
   // PDF RAG state
   const [documents, setDocuments] = useState([]);
   const [selectedDocIds, setSelectedDocIds] = useState([]);
+  const [pendingUploads, setPendingUploads] = useState([]);
+
+  function handleUploadStart(pending) {
+    setPendingUploads((p) => [...p, { ...pending, status: "processing" }]);
+  }
+
+  async function handleUploadDone(tempId) {
+    setPendingUploads((p) => p.filter((u) => u.id !== tempId));
+    await refreshDocuments();
+  }
+
+  function handleUploadError(tempId, message) {
+    setPendingUploads((p) =>
+      p.map((u) => (u.id === tempId ? { ...u, status: "failed", error: message } : u))
+    );
+  }
+
+  function dismissPendingUpload(tempId) {
+    setPendingUploads((p) => p.filter((u) => u.id !== tempId));
+  }
 
   // SEC Agent state
   const [secActiveDoc, setSecActiveDoc] = useState(null);
@@ -409,8 +462,37 @@ function ChatPage({ onLogout }) {
 
   const [chatMode, setChatMode] = useState("sec"); // "sec" | "doc"
   const [error, setError] = useState("");
+  const [historyLoaded, setHistoryLoaded] = useState({ sec: false, doc: false });
 
   const messages = chatMode === "sec" ? secMessages : docMessages;
+
+  async function loadHistory(mode) {
+    try {
+      const { messages: past } = await getChatHistory(mode);
+      const mapped = (past || []).map((m) => ({
+        role: m.role,
+        content: m.content,
+        ...(m.role === "assistant" ? { mode } : {}),
+      }));
+      if (mode === "doc") setDocMessages(mapped);
+      else setSecMessages(mapped);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setHistoryLoaded((h) => ({ ...h, [mode]: true }));
+    }
+  }
+
+  async function handleClearHistory() {
+    if (!window.confirm("Clear this conversation? This can't be undone.")) return;
+    try {
+      await clearChatHistory(chatMode);
+      if (chatMode === "doc") setDocMessages([]);
+      else setSecMessages([]);
+    } catch (err) {
+      setError(err.message);
+    }
+  }
 
   async function refreshDocuments() {
     try {
@@ -432,12 +514,15 @@ function ChatPage({ onLogout }) {
     }
   }
 
-  // Load the relevant sidebar data whenever the user switches modes
+  // Load the relevant sidebar data whenever the user switches modes,
+  // and hydrate that mode's thread from the server the first time it's opened.
   useEffect(() => {
     if (chatMode === "doc") {
       refreshDocuments();
+      if (!historyLoaded.doc) loadHistory("doc");
     } else if (chatMode === "sec") {
       refreshSecSidebar();
+      if (!historyLoaded.sec) loadHistory("sec");
     }
   }, [chatMode]);
 
@@ -567,6 +652,11 @@ function ChatPage({ onLogout }) {
         </div>
 
         <div className="header-right">
+          {messages.length > 0 && (
+            <button className="btn-clear" onClick={handleClearHistory} title="Clear this conversation">
+              Clear
+            </button>
+          )}
           <UserMenu onLogout={onLogout} />
         </div>
       </header>
@@ -588,8 +678,11 @@ function ChatPage({ onLogout }) {
             onClearAll={clearDocSelection}
             onDelete={handleDeleteDoc}
             maxSelect={MAX_COMPARE_DOCS}
-            onUploaded={refreshDocuments}
-            setError={setError}
+            onUploadStart={handleUploadStart}
+            onUploaded={handleUploadDone}
+            onUploadError={handleUploadError}
+            pendingUploads={pendingUploads}
+            onDismissPending={dismissPendingUpload}
           />
         )}
         {chatMode === "sec" && (

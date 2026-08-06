@@ -1,6 +1,6 @@
 import os
 import tempfile
-from fastapi import FastAPI, UploadFile, File, HTTPException, Depends
+from fastapi import FastAPI, UploadFile, File, HTTPException, Depends, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel
@@ -10,7 +10,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from agent.llm_agent import ask_upload,ask_sec
 from rag.emb_chunks import create_vectorstore
 from auth import hash_password, verify_password, create_access_token, decode_token
-from rag.db import save_user_info, get_user_by_email, save_chat, save_emb, save_doc_info, get_user_documents, list_sec_documents, delete_document
+from rag.db import save_user_info, get_user_by_email, save_chat, save_emb, save_doc_info, get_user_documents, list_sec_documents, delete_document, save_chat, load_chat, clear_chat
 from agent.session import get_active_doc, get_active_doc, get_active_set
 
 
@@ -186,3 +186,30 @@ def sec_documents(user=Depends(get_current_user)):
 def delete_document_route(document_id: str, user=Depends(get_current_user)):
     delete_document(user_id=user["sub"], document_id=document_id)
     return {"message": "Document deleted."}
+
+
+
+@app.get("/chat/history")
+async def get_history(
+    mode: str = Query("sec", description="Chat mode: 'sec' or 'doc'"),
+    user=Depends(get_current_user),
+):
+    user_id = user["sub"]
+    if mode not in ["sec", "doc"]:
+        raise HTTPException(status_code=400, detail="Invalid chat mode")
+    
+    messages = load_chat(user_id=user_id, mode=mode)
+    return {"messages": messages}
+
+
+@app.delete("/chat/history")
+async def clear_history(
+    mode: str = Query("sec", description="Chat mode: 'sec' or 'doc'"),
+    user=Depends(get_current_user),
+):
+    user_id = user["sub"]
+    if mode not in ["sec", "doc"]:
+        raise HTTPException(status_code=400, detail="Invalid chat mode")
+        
+    clear_chat(user_id=user_id, mode=mode)
+    return {"status": "success", "message": f"Cleared history for {mode} mode"}
