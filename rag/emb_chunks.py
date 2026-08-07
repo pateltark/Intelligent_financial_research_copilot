@@ -1,6 +1,7 @@
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from sentence_transformers import SentenceTransformer
+from rag.embeddings import get_embedding_model
 from langchain_core.documents import Document
 from concurrent.futures import ThreadPoolExecutor
 
@@ -17,8 +18,9 @@ from rag.db import (
 load_dotenv()
 
 groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
-model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
 
+# model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+model = get_embedding_model()
 _ingest_executor = ThreadPoolExecutor(max_workers=2)
 
 
