@@ -28,9 +28,10 @@ def normalize_text(text: str) -> str:
     return text.strip().lower().rstrip("?").rstrip(".").rstrip("!")
 
 
-def build_scope_prefix(mode: str, doc_ids: list[str] | None) -> str:
+def build_scope_prefix(mode: str, doc_ids: list | None) -> str:
     """Creates a consistent prefix based on search scope/documents."""
-    valid_ids = doc_ids if doc_ids else []
+    # Convert every ID to a string to prevent integer join errors
+    valid_ids = [str(doc_id) for doc_id in doc_ids] if doc_ids else []
     doc_str = ",".join(sorted(valid_ids)) if valid_ids else "global"
     return f"{mode}:{doc_str}"
 
@@ -155,6 +156,26 @@ def get_cached_response(
 
 
 def save_to_cache(mode: str, doc_ids: list[str] | None, question: str, response: dict, ttl: int = 86400):
-    """Saves output to both Tier 1 and Tier 2 caches simultaneously."""
+    """Saves output to both Tier 1 and Tier 2 caches, ONLY if doc_ids exist and answer is valid."""
+    
+    # 1. Don't cache if there is no active document scope
+    if not doc_ids:
+        print(" Cache Skipped: No active document ID provided.")
+        return
+
+    # 2. Don't cache fallback/error answers or empty responses
+    answer_text = response.get("answer", "") if isinstance(response, dict) else str(response)
+    
+    ignore_patterns = [
+        "please select at least one document",
+        "there is no active sec document",
+        "does not contain enough information"
+    ]
+    
+    if any(pattern in answer_text.lower() for pattern in ignore_patterns):
+        print("Cache Skipped: Fallback or error response detected.")
+        return
+
+    # Save to Redis if all checks pass
     set_exact_cache(mode, doc_ids, question, response, ttl)
     set_semantic_cache(mode, doc_ids, question, response, ttl)

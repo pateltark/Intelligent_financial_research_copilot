@@ -259,20 +259,23 @@ def generate_answer(
 def ask_sec(question: str, user_id: str):
     NOT_ENOUGH_INFO = "The provided document context does not contain enough information to answer this question."
 
-    # FIXED: Proper tuple unpacking for cache response
-    cached_payload, cache_status = get_cached_response(mode="sec", doc_ids=[], question=question)
-    if cached_payload:
-        return cached_payload.get("answer", cached_payload) if isinstance(cached_payload, dict) else cached_payload
-
     plan = planner(question)
     search_query = question
 
+    # ── CASE 1: Querying Currently Active SEC Document ───────────────
     if plan.action == "CURRENT_DOC":
         active_doc = get_active_doc(user_id)
         if not active_doc:
             return "There is no active SEC document. Please ask for a filing first (e.g., 'Show Tesla's latest 10-K')."
 
         doc_id = active_doc["document_id"]
+        doc_ids = [doc_id]  # 👈 Dynamic doc_id scope
+
+        # 1. Check cache WITH doc_ids
+        cached_payload, cache_status = get_cached_response(mode="sec", doc_ids=doc_ids, question=question)
+        if cached_payload:
+            return cached_payload.get("answer", cached_payload) if isinstance(cached_payload, dict) else cached_payload
+
         chunks = related_sec_chunks(document_id=doc_id, question=question, k=15)
 
         if not chunks or not _is_relevant(chunks):
@@ -282,16 +285,17 @@ def ask_sec(question: str, user_id: str):
         if not chunks:
             return NOT_ENOUGH_INFO
 
-        # FIXED: Reranking uses updated search_query
         reranked_chunks = rerank_chunks(query=search_query, chunks=chunks, top_k=4)
         if not reranked_chunks:
             return NOT_ENOUGH_INFO
 
         sec_crnt_ans = generate_answer(search_query, reranked_chunks, user_id, mode="sec")
-        save_to_cache(mode="sec", doc_ids=[], question=question, response={"answer": sec_crnt_ans}, ttl=86400)
+        
+        # 2. Save cache WITH doc_ids
+        save_to_cache(mode="sec", doc_ids=doc_ids, question=question, response={"answer": sec_crnt_ans}, ttl=86400)
         return sec_crnt_ans
 
-    # CASE 2: Fetching new SEC filing
+    # ── CASE 2: Fetching / Searching SEC Filings ─────────────────────
     docs = check_avail_sec_doc(plan)
     sec_chunks, touched_docs = [], []
 
@@ -318,7 +322,19 @@ def ask_sec(question: str, user_id: str):
             set_active_doc(user_id=user_id, document_id=document_id, ticker=request.ticker, form_type=request.form_type)
 
         touched_docs.append({"document_id": document_id, "ticker": request.ticker, "form_type": request.form_type})
-        doc_chunks = related_sec_chunks(document_id=document_id, question=question, k=15)
+
+    # Collect all document IDs touched by this query
+    doc_ids = [str(d["document_id"]) for d in touched_docs]
+
+    # Check cache WITH the specific doc_ids
+    if doc_ids:
+        cached_payload, cache_status = get_cached_response(mode="sec", doc_ids=doc_ids, question=question)
+        if cached_payload:
+            return cached_payload.get("answer", cached_payload) if isinstance(cached_payload, dict) else cached_payload
+
+    # Perform retrieval across touched documents
+    for t_doc in touched_docs:
+        doc_chunks = related_sec_chunks(document_id=t_doc["document_id"], question=question, k=15)
         if doc_chunks:
             sec_chunks.extend(doc_chunks)
 
@@ -339,21 +355,24 @@ def ask_sec(question: str, user_id: str):
 
     set_active_set(user_id, touched_docs)
     sec_ans = generate_answer(search_query, reranked_chunks, user_id, mode="sec")
-    save_to_cache(mode="sec", doc_ids=[], question=question, response={"answer": sec_ans}, ttl=86400)
+    
+    # Save cache WITH specific doc_ids
+    save_to_cache(mode="sec", doc_ids=doc_ids, question=question, response={"answer": sec_ans}, ttl=86400)
     return sec_ans
 
 
 def ask_upload(question: str, user_id: str, document_ids: list[str] | None = None):
     NOT_ENOUGH_INFO = "The provided document context does not contain enough information to answer this question."
 
-    # FIXED: Proper tuple unpacking for cache response
-    cached_payload, cache_status = get_cached_response(mode="doc", doc_ids=document_ids or [], question=question)
-    if cached_payload:
-        return cached_payload.get("answer", cached_payload) if isinstance(cached_payload, dict) else cached_payload
-
     if not document_ids:
         return "Please select at least one document to chat with."
 
+    # 1. Check cache WITH selected document_ids
+    cached_payload, cache_status = get_cached_response(mode="doc", doc_ids=document_ids, question=question)
+    if cached_payload:
+        return cached_payload.get("answer", cached_payload) if isinstance(cached_payload, dict) else cached_payload
+
+    # 2. Fetch context chunks from specific documents
     raw_chunks = related_chunks_per_doc(
         user_id=user_id, question=question, document_ids=document_ids, k_per_doc=10
     )
@@ -369,5 +388,6 @@ def ask_upload(question: str, user_id: str, document_ids: list[str] | None = Non
     labels = list({row[2] for row in reranked_chunks if len(row) > 2 and row[2]})
     ans = generate_answer(question=question, context_chunks=reranked_chunks, user_id=user_id, mode="doc", labels=labels)
     
-    save_to_cache(mode="doc", doc_ids=document_ids or [], question=question, response={"answer": ans}, ttl=86400)
+    # 3. Save cache WITH selected document_ids
+    save_to_cache(mode="doc", doc_ids=document_ids, question=question, response={"answer": ans}, ttl=86400)
     return ans
